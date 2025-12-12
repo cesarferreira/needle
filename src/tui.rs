@@ -17,6 +17,7 @@ use std::process::Command;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -32,6 +33,7 @@ pub struct AppState {
     pub(crate) refreshing: bool,
     pub(crate) shimmer_phase: u8,
     pub(crate) details_ci_selected: usize,
+    pub(crate) details_last_auto_refresh: Option<Instant>,
 }
 
 impl AppState {
@@ -44,6 +46,7 @@ impl AppState {
             refreshing: false,
             shimmer_phase: 0,
             details_ci_selected: 0,
+            details_last_auto_refresh: None,
         }
     }
 }
@@ -123,6 +126,17 @@ fn human_age(now: i64, then: i64) -> String {
         format!("{}h ago", d / 3600)
     } else {
         format!("{}d ago", d / 86400)
+    }
+}
+
+fn human_duration(secs: i64) -> String {
+    let s = secs.max(0);
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else {
+        format!("{}h{}m", s / 3600, (s % 3600) / 60)
     }
 }
 
@@ -547,7 +561,13 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
                 crate::model::CiCheckState::Neutral => ("➖", Color::Gray),
                 crate::model::CiCheckState::None => ("⏺", Color::Gray),
             };
-            let name = truncate_ellipsis(&c.name, iw.saturating_sub(6));
+            let mut suffix = String::new();
+            if matches!(c.state, crate::model::CiCheckState::Running) {
+                if let Some(start) = c.started_at_unix {
+                    suffix = format!(" ({})", human_duration(now.saturating_sub(start)));
+                }
+            }
+            let name = truncate_ellipsis(&format!("{}{}", c.name, suffix), iw.saturating_sub(6));
             let base = if is_sel {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
@@ -610,6 +630,26 @@ pub fn run_tui(
     }
 
     loop {
+        // Auto refresh in details view every 30s (non-blocking).
+        if state.mode == ViewMode::Details && !state.refreshing {
+            let should = state
+                .details_last_auto_refresh
+                .map(|t| t.elapsed() >= Duration::from_secs(30))
+                .unwrap_or(true);
+            if should {
+                state.details_last_auto_refresh = Some(Instant::now());
+                state.refreshing = true;
+                state.shimmer_phase = 0;
+                let (tx, rx) = mpsc::channel();
+                refresh_rx = Some(rx);
+                let rf = Arc::clone(&refresh_fn);
+                std::thread::spawn(move || {
+                    let res = rf();
+                    let _ = tx.send(res);
+                });
+            }
+        }
+
         // If a refresh is in-flight, animate shimmer and apply results when ready.
         if state.refreshing {
             state.shimmer_phase = state.shimmer_phase.wrapping_add(1);
@@ -712,10 +752,12 @@ pub fn run_tui(
                                     state.details_pr_key = Some(pr.pr.pr_key.clone());
                                     state.mode = ViewMode::Details;
                                     state.details_ci_selected = 0;
+                                    state.details_last_auto_refresh = Some(Instant::now());
                                 }
                             }
                         } else {
                             state.mode = ViewMode::List;
+                            state.details_last_auto_refresh = None;
                         }
                     }
                     KeyCode::Up => {

@@ -77,6 +77,8 @@ struct StatusContextNode {
     conclusion: Option<String>,
     #[serde(rename = "detailsUrl")]
     details_url: Option<String>,
+    #[serde(rename = "startedAt")]
+    started_at: Option<String>,
     // StatusContext
     context: Option<String>,
     state: Option<String>,
@@ -230,6 +232,7 @@ query($page_size: Int!, $cursor: String) {
                       name
                       conclusion
                       detailsUrl
+                      startedAt
                     }
                     ... on StatusContext {
                       context
@@ -284,6 +287,7 @@ query($page_size: Int!, $cursor: String, $search_query: String!) {
                       name
                       conclusion
                       detailsUrl
+                      startedAt
                     }
                     ... on StatusContext {
                       context
@@ -348,10 +352,15 @@ fn map_ci_checks(node: &PullRequestNode) -> Vec<CiCheck> {
                     None => CiCheckState::Running,
                     _ => CiCheckState::None,
                 };
+                let started_at_unix = n
+                    .started_at
+                    .as_deref()
+                    .and_then(parse_github_datetime_to_unix);
                 out.push(CiCheck {
                     name,
                     state,
                     url: n.details_url.clone(),
+                    started_at_unix,
                 });
             }
             Some("StatusContext") => {
@@ -366,6 +375,7 @@ fn map_ci_checks(node: &PullRequestNode) -> Vec<CiCheck> {
                     name,
                     state,
                     url: n.target_url.clone(),
+                    started_at_unix: None,
                 });
             }
             _ => {}

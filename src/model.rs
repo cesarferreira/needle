@@ -54,6 +54,7 @@ pub struct CiCheck {
     pub name: String,
     pub state: CiCheckState,
     pub url: Option<String>,
+    pub started_at_unix: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
