@@ -6,9 +6,10 @@ mod timeutil;
 mod tui;
 
 use crate::db::{db_path, open_db};
-use crate::refresh::refresh;
+use crate::refresh::{load_cached, refresh};
 use crate::tui::{AppState, run_tui};
 use octocrab::Octocrab;
+use std::sync::Arc;
 
 fn parse_days_arg() -> i64 {
     // Default: last 30 days.
@@ -71,17 +72,26 @@ async fn main() {
         std::process::exit(1);
     });
 
-    let initial = refresh(&conn, &octo, days).await.unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
-
-    let state = AppState::new(initial);
+    // Fast startup: render cached SQLite snapshot immediately, then refresh in background.
+    let cached = load_cached(&conn, days).unwrap_or_else(|_e| Vec::new());
+    let state = AppState::new(cached);
 
     let handle = tokio::runtime::Handle::current();
-    if let Err(e) = run_tui(&conn, state, || {
-        tokio::task::block_in_place(|| handle.block_on(refresh(&conn, &octo, days)))
-    }) {
+    let db_path_for_refresh = path.clone();
+    let octo_for_refresh = octo.clone();
+    let handle_for_refresh = handle.clone();
+    let refresh_fn: Arc<dyn Fn() -> Result<Vec<crate::refresh::UiPr>, String> + Send + Sync> =
+        Arc::new(move || {
+            let c = open_db(&db_path_for_refresh)?;
+            // Called from a non-runtime worker thread (for shimmer), so this uses handle.block_on.
+            if tokio::runtime::Handle::try_current().is_ok() {
+                tokio::task::block_in_place(|| handle_for_refresh.block_on(refresh(&c, &octo_for_refresh, days)))
+            } else {
+                handle_for_refresh.block_on(refresh(&c, &octo_for_refresh, days))
+            }
+        });
+
+    if let Err(e) = run_tui(&conn, state, refresh_fn, true) {
         eprintln!("{e}");
         std::process::exit(1);
     }

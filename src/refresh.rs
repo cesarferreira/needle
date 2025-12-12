@@ -23,6 +23,77 @@ pub struct UiPr {
     pub last_opened_at: Option<i64>,
 }
 
+fn parse_ci_state(s: Option<&str>) -> CiState {
+    match s {
+        Some("success") => CiState::Success,
+        Some("failure") => CiState::Failure,
+        Some("running") => CiState::Running,
+        Some("none") | None => CiState::None,
+        _ => CiState::None,
+    }
+}
+
+fn parse_review_state(s: Option<&str>) -> ReviewState {
+    match s {
+        Some("requested") => ReviewState::Requested,
+        Some("approved") => ReviewState::Approved,
+        Some("none") | None => ReviewState::None,
+        _ => ReviewState::None,
+    }
+}
+
+/// Load cached PRs from SQLite for a fast startup render (no network).
+/// Note: DB does not store GitHub updatedAt; we approximate with last_seen_at for ordering/age.
+pub fn load_cached(conn: &Connection, cutoff_days: i64) -> Result<Vec<UiPr>, String> {
+    let existing: HashMap<String, DbPrRow> = load_all_prs(conn)?;
+    let now = now_unix();
+    let cutoff_ts = now.saturating_sub(cutoff_days.saturating_mul(86_400));
+
+    let mut out: Vec<UiPr> = Vec::new();
+    for (_k, row) in existing {
+        let updated_at_unix = row.last_seen_at.unwrap_or(now);
+        if updated_at_unix < cutoff_ts {
+            continue;
+        }
+        let pr = Pr {
+            pr_key: row.pr_key.clone(),
+            owner: row.owner.clone(),
+            repo: row.repo.clone(),
+            number: row.number,
+            author: "unknown".to_string(),
+            title: row.title.clone(),
+            url: row.url.clone(),
+            updated_at_unix,
+            last_commit_sha: row.last_commit_sha.clone(),
+            ci_state: parse_ci_state(row.last_ci_state.as_deref()),
+            review_state: parse_review_state(row.last_review_state.as_deref()),
+        };
+
+        let is_new_review = false;
+        let is_new_ci_failure = false;
+        let score = score_pr(&pr, None, now, is_new_ci_failure);
+        let category = category_for(score);
+        let display_status = status_text(&pr, now, is_new_ci_failure, is_new_review);
+
+        out.push(UiPr {
+            pr,
+            score,
+            category,
+            display_status,
+            is_new_ci_failure,
+            is_new_review_request: is_new_review,
+            last_opened_at: row.last_opened_at,
+        });
+    }
+
+    out.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| b.pr.updated_at_unix.cmp(&a.pr.updated_at_unix))
+    });
+    Ok(out)
+}
+
 fn ci_to_db(ci: &CiState) -> &'static str {
     ci.as_str()
 }

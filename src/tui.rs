@@ -5,6 +5,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScree
 use crossterm::tty::IsTty;
 use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Alignment;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -13,6 +14,7 @@ use ratatui::Terminal;
 use rusqlite::Connection;
 use std::io::{self, Stdout};
 use std::process::Command;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -27,6 +29,8 @@ pub struct AppState {
     pub selected_idx: usize, // index into visible_pr_indices
     pub(crate) mode: ViewMode,
     pub(crate) details_pr_key: Option<String>,
+    pub(crate) refreshing: bool,
+    pub(crate) shimmer_phase: u8,
 }
 
 impl AppState {
@@ -36,6 +40,8 @@ impl AppState {
             selected_idx: 0,
             mode: ViewMode::List,
             details_pr_key: None,
+            refreshing: false,
+            shimmer_phase: 0,
         }
     }
 }
@@ -45,6 +51,14 @@ fn category_title(cat: Category) -> &'static str {
         Category::NeedsYou => "🔥 NEEDS YOU",
         Category::Waiting => "⏳ WAITING",
         Category::Stale => "⚠️ STALE",
+    }
+}
+
+fn category_style(cat: Category) -> Style {
+    match cat {
+        Category::NeedsYou => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Category::Waiting => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Category::Stale => Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
     }
 }
 
@@ -226,10 +240,11 @@ fn build_list_lines(
         let start_len = lines.len();
 
         // Header + divider
-        push_line(&mut lines, inner_height, Line::from(Span::styled(
-            category_title(cat).to_string(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
+        push_line(
+            &mut lines,
+            inner_height,
+            Line::from(Span::styled(category_title(cat).to_string(), category_style(cat))),
+        );
         push_line(
             &mut lines,
             inner_height,
@@ -247,7 +262,7 @@ fn build_list_lines(
                     pad_right("TITLE", title_w),
                     pad_right("STATUS", status_w)
                 ),
-                Style::default().add_modifier(Modifier::DIM),
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
             )),
         );
 
@@ -284,7 +299,7 @@ fn build_list_lines(
                 .map(|t| now_unix().saturating_sub(t) <= 3600)
                 .unwrap_or(false);
 
-            let style = if is_selected {
+            let base = if is_selected {
                 // Highlight the whole row.
                 Style::default().add_modifier(Modifier::REVERSED)
             } else if recent_dim {
@@ -293,10 +308,25 @@ fn build_list_lines(
                 Style::default()
             };
 
-            let line = Line::from(Span::styled(
-                format!("{prefix}{repo}  {author}  {num}  {title}  {status}"),
-                style,
-            ));
+            let status_color = match pr.pr.ci_state {
+                crate::model::CiState::Success => Color::Green,
+                crate::model::CiState::Failure => Color::Red,
+                crate::model::CiState::Running => Color::Yellow,
+                crate::model::CiState::None => Color::Gray,
+            };
+
+            let line = Line::from(vec![
+                Span::styled(prefix.to_string(), base.fg(Color::White)),
+                Span::styled(repo, base.fg(Color::Cyan)),
+                Span::raw("  "),
+                Span::styled(author, base.fg(Color::Magenta)),
+                Span::raw("  "),
+                Span::styled(num, base.fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::raw("  "),
+                Span::styled(title, base.fg(Color::White)),
+                Span::raw("  "),
+                Span::styled(status, base.fg(status_color).add_modifier(Modifier::BOLD)),
+            ]);
             push_line(&mut lines, inner_height, line);
         }
 
@@ -314,7 +344,7 @@ fn build_list_lines(
     (lines, visible_pr_indices)
 }
 
-fn build_footer(inner_width: u16, mode: ViewMode) -> Line<'static> {
+fn build_footer(inner_width: u16, mode: ViewMode, refreshing: bool, shimmer_phase: u8) -> Line<'static> {
     #[derive(Clone)]
     struct Seg {
         text: String,
@@ -341,12 +371,32 @@ fn build_footer(inner_width: u16, mode: ViewMode) -> Line<'static> {
         }
     }
 
+    fn shimmer(phase: u8) -> String {
+        // 10-column shimmer bar with a moving bright block.
+        let w = 10usize;
+        let pos = (phase as usize) % w;
+        let mut s = String::with_capacity(w);
+        for i in 0..w {
+            s.push(if i == pos { '▓' } else { '░' });
+        }
+        s
+    }
+
     let mut segs: Vec<Seg> = Vec::new();
     match mode {
         ViewMode::List => {
             segs.extend([
                 keycap("q"), label("quit"), sep(),
-                keycap("r"), label("refresh"), sep(),
+                keycap("r"),
+                if refreshing {
+                    Seg {
+                        text: format!("refreshing {}", shimmer(shimmer_phase)),
+                        style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    }
+                } else {
+                    label("refresh")
+                },
+                sep(),
                 keycap("Enter"), label("open"), sep(),
                 keycap("Tab"), label("details"), sep(),
                 keycap("↑/↓"), label("move"),
@@ -356,7 +406,16 @@ fn build_footer(inner_width: u16, mode: ViewMode) -> Line<'static> {
             segs.extend([
                 keycap("Tab"), label("back"), sep(),
                 keycap("Enter"), label("open"), sep(),
-                keycap("r"), label("refresh"), sep(),
+                keycap("r"),
+                if refreshing {
+                    Seg {
+                        text: format!("refreshing {}", shimmer(shimmer_phase)),
+                        style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    }
+                } else {
+                    label("refresh")
+                },
+                sep(),
                 keycap("q"), label("quit"),
             ]);
         }
@@ -368,23 +427,17 @@ fn build_footer(inner_width: u16, mode: ViewMode) -> Line<'static> {
         .sum();
     let iw = inner_width as usize;
 
-    // If it doesn't fit, fall back to a plain truncated hint (still right-aligned).
+    // If it doesn't fit, fall back to a plain truncated hint.
     if total_w > iw {
         let hint = match mode {
             ViewMode::List => "[q] quit  [r] refresh  [Enter] open  [Tab] details  [↑/↓] move",
             ViewMode::Details => "[Tab] back  [Enter] open  [r] refresh  [q] quit",
         };
         let s = truncate_ellipsis(hint, iw);
-        let pad = iw.saturating_sub(UnicodeWidthStr::width(s.as_str()));
-        return Line::from(vec![
-            Span::raw(std::iter::repeat(' ').take(pad).collect::<String>()),
-            Span::styled(s, Style::default().fg(Color::Gray)),
-        ]);
+        return Line::from(Span::styled(s, Style::default().fg(Color::Gray)));
     }
 
-    let pad = iw.saturating_sub(total_w);
     let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::raw(std::iter::repeat(' ').take(pad).collect::<String>()));
     for s in segs {
         spans.push(Span::styled(s.text, s.style));
     }
@@ -399,9 +452,12 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16) -> Vec<Li
     // Title line
     out.push(Line::from(Span::styled(
         truncate_ellipsis("DETAILS", iw),
-        Style::default().add_modifier(Modifier::BOLD),
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     )));
-    out.push(Line::from(Span::raw(std::iter::repeat('─').take(iw).collect::<String>())));
+    out.push(Line::from(Span::styled(
+        std::iter::repeat('─').take(iw).collect::<String>(),
+        Style::default().fg(Color::Gray),
+    )));
 
     let rows = [
         ("Repo", format!("{}/{}", pr.pr.owner, pr.pr.repo)),
@@ -424,8 +480,14 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16) -> Vec<Li
         if (out.len() as u16) >= inner_height {
             break;
         }
-        let line = format!("{k}: {v}");
-        out.push(Line::from(Span::raw(truncate_ellipsis(&line, iw))));
+        let key = format!("{k}: ");
+        let val = v;
+        let key_w = UnicodeWidthStr::width(key.as_str());
+        let val_w = iw.saturating_sub(key_w);
+        out.push(Line::from(vec![
+            Span::styled(key, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(truncate_ellipsis(&val, val_w), Style::default().fg(Color::White)),
+        ]));
     }
 
     out
@@ -442,7 +504,8 @@ fn clamp_selection(selected: &mut usize, visible_len: usize) {
 pub fn run_tui(
     conn: &Connection,
     mut state: AppState,
-    mut on_refresh: impl FnMut() -> Result<Vec<UiPr>, String>,
+    refresh_fn: Arc<dyn Fn() -> Result<Vec<UiPr>, String> + Send + Sync>,
+    start_refresh_immediately: bool,
 ) -> Result<(), String> {
     if !io::stdin().is_tty() || !io::stdout().is_tty() {
         return Err("Not a TTY: run `needle` in an interactive terminal.".to_string());
@@ -456,16 +519,53 @@ pub fn run_tui(
         Terminal::new(backend).map_err(|e| format!("Failed to init terminal: {e}"))?;
 
     let mut last_visible: Vec<usize> = Vec::new();
+    let mut refresh_rx: Option<mpsc::Receiver<Result<Vec<UiPr>, String>>> = None;
+
+    if start_refresh_immediately && !state.refreshing {
+        state.refreshing = true;
+        state.shimmer_phase = 0;
+        let (tx, rx) = mpsc::channel();
+        refresh_rx = Some(rx);
+        let rf = Arc::clone(&refresh_fn);
+        std::thread::spawn(move || {
+            let res = rf();
+            let _ = tx.send(res);
+        });
+    }
 
     loop {
+        // If a refresh is in-flight, animate shimmer and apply results when ready.
+        if state.refreshing {
+            state.shimmer_phase = state.shimmer_phase.wrapping_add(1);
+            if let Some(rx) = &refresh_rx {
+                match rx.try_recv() {
+                    Ok(Ok(new_prs)) => {
+                        state.prs = new_prs;
+                        state.refreshing = false;
+                        refresh_rx = None;
+                    }
+                    Ok(Err(_e)) => {
+                        // Keep V1 minimal: stop refreshing; errors surface on next startup/log.
+                        state.refreshing = false;
+                        refresh_rx = None;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        state.refreshing = false;
+                        refresh_rx = None;
+                    }
+                }
+            }
+        }
+
         let area = terminal
             .size()
             .map_err(|e| format!("Failed to read terminal size: {e}"))?;
         let inner_height = area.height.saturating_sub(2); // borders
         let inner_width = area.width.saturating_sub(2); // borders
-        let content_height = inner_height.saturating_sub(1); // reserve one line for footer
+        let content_height = inner_height.saturating_sub(1); // footer rendered separately at bottom
 
-        let (mut lines, visible) = if state.mode == ViewMode::List {
+        let (lines, visible) = if state.mode == ViewMode::List {
             let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx);
             (l, v)
         } else {
@@ -479,10 +579,7 @@ pub fn run_tui(
                 (l, v)
             }
         };
-        // Footer
-        if (lines.len() as u16) < inner_height {
-            lines.push(build_footer(inner_width, state.mode));
-        }
+        let footer_line = build_footer(inner_width, state.mode, state.refreshing, state.shimmer_phase);
 
         last_visible = visible;
         if state.mode == ViewMode::List {
@@ -491,15 +588,22 @@ pub fn run_tui(
 
         terminal
             .draw(|f| {
-                let chunks = Layout::default()
-                    .constraints([Constraint::Percentage(100)])
-                    .split(f.area());
-
+                let area = f.area();
                 let block = Block::default().borders(Borders::ALL);
+                let inner = block.inner(area);
+                f.render_widget(block, area);
+                let parts = Layout::default()
+                    .constraints([Constraint::Min(0), Constraint::Length(1)])
+                    .split(inner);
 
+                // Content (top)
                 let text = Text::from(lines.clone());
-                let paragraph = Paragraph::new(text).block(block);
-                f.render_widget(paragraph, chunks[0]);
+                let content = Paragraph::new(text);
+                f.render_widget(content, parts[0]);
+
+                // Footer (bottom, right-aligned)
+                let footer = Paragraph::new(footer_line.clone()).alignment(Alignment::Right);
+                f.render_widget(footer, parts[1]);
             })
             .map_err(|e| format!("Draw failed: {e}"))?;
 
@@ -512,9 +616,19 @@ pub fn run_tui(
                 match k.code {
                     KeyCode::Char('q') => break,
                     KeyCode::Char('r') => {
-                        let new_prs = on_refresh()?;
-                        state.prs = new_prs;
-                        // selection clamped next loop after recompute of visible items
+                        if !state.refreshing {
+                            state.refreshing = true;
+                            state.shimmer_phase = 0;
+                            let (tx, rx) = mpsc::channel();
+                            refresh_rx = Some(rx);
+                            // Run the refresh off-thread so we can animate shimmer + keep quit responsive.
+                            // Note: closure may block on network.
+                            let rf = Arc::clone(&refresh_fn);
+                            std::thread::spawn(move || {
+                                let res = rf();
+                                let _ = tx.send(res);
+                            });
+                        }
                     }
                     KeyCode::Tab => {
                         if state.mode == ViewMode::List {
