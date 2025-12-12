@@ -159,4 +159,26 @@ pub fn set_last_opened_at(conn: &Connection, pr_key: &str, ts: i64) -> Result<()
     Ok(())
 }
 
+pub fn delete_prs_not_in(conn: &Connection, keep_pr_keys: &[String]) -> Result<(), String> {
+    if keep_pr_keys.is_empty() {
+        conn.execute("DELETE FROM prs", [])
+            .map_err(|e| format!("Failed to delete prs: {e}"))?;
+        return Ok(());
+    }
+
+    let placeholders = (0..keep_pr_keys.len())
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!("DELETE FROM prs WHERE pr_key NOT IN ({placeholders})");
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Failed to prepare delete query: {e}"))?;
+    let refs: Vec<&str> = keep_pr_keys.iter().map(|s| s.as_str()).collect();
+    stmt.execute(rusqlite::params_from_iter(refs))
+        .map_err(|e| format!("Failed to delete old prs: {e}"))?;
+    Ok(())
+}
+
 

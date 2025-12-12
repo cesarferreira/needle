@@ -1,4 +1,4 @@
-use crate::db::{DbPrRow, load_all_prs, now_unix, upsert_pr};
+use crate::db::{DbPrRow, delete_prs_not_in, load_all_prs, now_unix, upsert_pr};
 use crate::github::fetch_attention_prs;
 use crate::model::{CiState, Pr, ReviewState};
 use octocrab::Octocrab;
@@ -217,7 +217,10 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64) -> Re
     let cutoff_ts = now.saturating_sub(cutoff_days.saturating_mul(86_400));
     let prs = fetch_attention_prs(octo, cutoff_ts).await?;
 
-    for pr in prs.into_iter().filter(|p| p.updated_at_unix >= cutoff_ts) {
+    let prs: Vec<Pr> = prs.into_iter().filter(|p| p.updated_at_unix >= cutoff_ts).collect();
+    let keep_keys: Vec<String> = prs.iter().map(|p| p.pr_key.clone()).collect();
+
+    for pr in prs {
         let old = existing.get(&pr.pr_key);
         let new_review = is_new_review_request(&pr, old);
         let new_ci_failure = is_new_ci_failure(&pr, old);
@@ -251,6 +254,9 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64) -> Re
             last_opened_at,
         });
     }
+
+    // Keep cache consistent with the current attention set so cached startup doesn't show stale/irrelevant PRs.
+    delete_prs_not_in(conn, &keep_keys)?;
 
     out.sort_by(|a, b| {
         b.score
