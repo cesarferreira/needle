@@ -76,10 +76,7 @@ async fn main() {
         std::process::exit(1);
     });
 
-    let state = AppState {
-        prs: initial,
-        selected_idx: 0,
-    };
+    let state = AppState::new(initial);
 
     let handle = tokio::runtime::Handle::current();
     if let Err(e) = run_tui(&conn, state, || {

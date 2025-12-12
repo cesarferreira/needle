@@ -40,6 +40,7 @@ pub struct Pr {
     pub owner: String,
     pub repo: String,
     pub number: i64,
+    pub author: String,
     pub title: String,
     pub url: String,
 

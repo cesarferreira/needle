@@ -1,7 +1,7 @@
 use crate::model::{CiState, Pr, ReviewState};
 use crate::timeutil::{parse_github_datetime_to_unix, unix_to_ymd};
 use octocrab::Octocrab;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, serde::Serialize)]
 struct PaginationVars {
@@ -35,6 +35,30 @@ struct Repository {
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct Author {
+    login: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ReviewRequestConnection {
+    nodes: Option<Vec<ReviewRequestNode>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ReviewRequestNode {
+    #[serde(rename = "requestedReviewer")]
+    requested_reviewer: Option<RequestedReviewer>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RequestedReviewer {
+    #[serde(rename = "__typename")]
+    typename: Option<String>,
+    login: Option<String>, // User
+    slug: Option<String>,  // Team
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct StatusCheckRollup {
     state: Option<String>,
 }
@@ -63,6 +87,9 @@ struct PullRequestNode {
     #[serde(rename = "updatedAt")]
     updated_at: String,
     repository: Repository,
+    author: Option<Author>,
+    #[serde(rename = "reviewRequests")]
+    review_requests: Option<ReviewRequestConnection>,
     #[serde(rename = "headRefOid")]
     head_ref_oid: Option<String>,
     #[serde(rename = "reviewDecision")]
@@ -79,6 +106,7 @@ struct ViewerPullRequests {
 
 #[derive(Debug, serde::Deserialize)]
 struct Viewer {
+    login: String,
     #[serde(rename = "pullRequests")]
     pull_requests: ViewerPullRequests,
 }
@@ -110,6 +138,9 @@ struct SearchNode {
     #[serde(rename = "updatedAt")]
     updated_at: Option<String>,
     repository: Option<Repository>,
+    author: Option<Author>,
+    #[serde(rename = "reviewRequests")]
+    review_requests: Option<ReviewRequestConnection>,
     #[serde(rename = "headRefOid")]
     head_ref_oid: Option<String>,
     #[serde(rename = "reviewDecision")]
@@ -128,6 +159,8 @@ impl SearchNode {
             url: self.url?,
             updated_at: self.updated_at?,
             repository: self.repository?,
+            author: self.author,
+            review_requests: self.review_requests,
             head_ref_oid: self.head_ref_oid,
             review_decision: self.review_decision,
             commits: self.commits,
@@ -143,16 +176,27 @@ struct SearchData {
 const AUTHORED_QUERY: &str = r#"
 query($page_size: Int!, $cursor: String) {
   viewer {
+    login
     pullRequests(first: $page_size, after: $cursor, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number
+        author { login }
         title
         url
         updatedAt
         headRefOid
         reviewDecision
         repository { name owner { login } }
+        reviewRequests(first: 50) {
+          nodes {
+            requestedReviewer {
+              __typename
+              ... on User { login }
+              ... on Team { slug }
+            }
+          }
+        }
         commits(last: 1) {
           nodes {
             commit {
@@ -174,12 +218,22 @@ query($page_size: Int!, $cursor: String, $search_query: String!) {
       __typename
       ... on PullRequest {
         number
+        author { login }
         title
         url
         updatedAt
         headRefOid
         reviewDecision
         repository { name owner { login } }
+        reviewRequests(first: 50) {
+          nodes {
+            requestedReviewer {
+              __typename
+              ... on User { login }
+              ... on Team { slug }
+            }
+          }
+        }
         commits(last: 1) {
           nodes {
             commit {
@@ -228,12 +282,29 @@ fn map_review_state(node: &PullRequestNode, is_requested: bool) -> ReviewState {
     }
 }
 
+fn is_review_requested_by_user(node: &PullRequestNode, viewer_login: &str) -> bool {
+    let Some(rr) = &node.review_requests else { return false };
+    let Some(nodes) = &rr.nodes else { return false };
+    for n in nodes {
+        let Some(r) = &n.requested_reviewer else { continue };
+        if r.typename.as_deref() == Some("User") && r.login.as_deref() == Some(viewer_login) {
+            return true;
+        }
+    }
+    false
+}
+
 fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
     let ci_state = map_ci_state(&node);
     let last_commit_sha = node.head_ref_oid.clone();
     let review_state = map_review_state(&node, is_requested);
     let owner = node.repository.owner.login;
     let repo = node.repository.name;
+    let author = node
+        .author
+        .as_ref()
+        .map(|a| a.login.clone())
+        .unwrap_or_else(|| "unknown".to_string());
     let updated_at_unix = parse_github_datetime_to_unix(&node.updated_at)?;
     let pr_key = format!("{owner}/{repo}#{}", node.number);
 
@@ -242,6 +313,7 @@ fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
         owner,
         repo,
         number: node.number,
+        author,
         title: node.title,
         url: node.url,
         updated_at_unix,
@@ -255,6 +327,7 @@ pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64) -> Result<Vec<
     // Fetch authored PRs
     let mut authored: Vec<PullRequestNode> = Vec::new();
     let mut cursor: Option<String> = None;
+    let mut viewer_login: Option<String> = None;
     loop {
         let vars = PaginationVars {
             page_size: 50,
@@ -268,6 +341,10 @@ pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64) -> Result<Vec<
             .graphql(&payload)
             .await
             .map_err(|e| format!("GitHub GraphQL authored query failed: {e}"))?;
+
+        if viewer_login.is_none() {
+            viewer_login = Some(resp.data.viewer.login.clone());
+        }
 
         if let Some(nodes) = resp.data.viewer.pull_requests.nodes {
             // Order is updatedAt DESC, so we can stop paginating once this page crosses cutoff.
@@ -296,6 +373,8 @@ pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64) -> Result<Vec<
         }
     }
 
+    let viewer_login = viewer_login.unwrap_or_else(|| "unknown".to_string());
+
     // Fetch review-requested PRs
     let cutoff_date = unix_to_ymd(cutoff_ts)
         .map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}"))
@@ -305,7 +384,6 @@ pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64) -> Result<Vec<
         cutoff_date
     );
 
-    let mut requested_keys: HashSet<String> = HashSet::new();
     let mut requested_nodes: Vec<PullRequestNode> = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -340,12 +418,11 @@ pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64) -> Result<Vec<
                             continue;
                         }
                     }
-                    let key = format!(
-                        "{}/{}#{}",
-                        pr.repository.owner.login, pr.repository.name, pr.number
-                    );
-                    requested_keys.insert(key);
-                    requested_nodes.push(pr);
+                    // Only keep PRs where the viewer is explicitly requested as a User reviewer
+                    // (ignore team review requests).
+                    if is_review_requested_by_user(&pr, &viewer_login) {
+                        requested_nodes.push(pr);
+                    }
                 }
             }
             if min_updated.is_some_and(|m| m < cutoff_ts) {
@@ -366,11 +443,8 @@ pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64) -> Result<Vec<
     let mut by_key: HashMap<String, Pr> = HashMap::new();
 
     for node in authored {
-        let key = format!(
-            "{}/{}#{}",
-            node.repository.owner.login, node.repository.name, node.number
-        );
-        if let Some(pr) = to_pr(node, requested_keys.contains(&key)) {
+        let requested_user = is_review_requested_by_user(&node, &viewer_login);
+        if let Some(pr) = to_pr(node, requested_user) {
             by_key.insert(pr.pr_key.clone(), pr);
         }
     }

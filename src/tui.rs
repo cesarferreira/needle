@@ -6,7 +6,7 @@ use crossterm::tty::IsTty;
 use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Terminal;
@@ -16,9 +16,28 @@ use std::process::Command;
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    List,
+    Details,
+}
+
 pub struct AppState {
     pub prs: Vec<UiPr>,
     pub selected_idx: usize, // index into visible_pr_indices
+    pub(crate) mode: ViewMode,
+    pub(crate) details_pr_key: Option<String>,
+}
+
+impl AppState {
+    pub fn new(prs: Vec<UiPr>) -> Self {
+        Self {
+            prs,
+            selected_idx: 0,
+            mode: ViewMode::List,
+            details_pr_key: None,
+        }
+    }
 }
 
 fn category_title(cat: Category) -> &'static str {
@@ -78,6 +97,19 @@ fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
+fn human_age(now: i64, then: i64) -> String {
+    let d = now.saturating_sub(then);
+    if d < 60 {
+        "now".to_string()
+    } else if d < 3600 {
+        format!("{}m ago", d / 60)
+    } else if d < 86400 {
+        format!("{}h ago", d / 3600)
+    } else {
+        format!("{}d ago", d / 86400)
+    }
+}
+
 fn open_in_browser(url: &str) {
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
@@ -109,7 +141,7 @@ fn open_in_browser(url: &str) {
     let _ = cmd.spawn();
 }
 
-fn build_lines(
+fn build_list_lines(
     prs: &[UiPr],
     inner_width: u16,
     inner_height: u16,
@@ -127,7 +159,7 @@ fn build_lines(
     }
 
     // Table-ish column sizing (dynamic; only truncates when the terminal width forces it).
-    // Columns: prefix(2) repo(var) #num(var) title(var) status(var)
+    // Columns: prefix(2) repo(var) author(var) #num(var) title(var) status(var)
     let iw = inner_width as usize;
     let prefix_w = 2usize;
     let sep_w = 2usize; // two spaces between columns
@@ -140,6 +172,11 @@ fn build_lines(
         })
         .max()
         .unwrap_or(10);
+    let max_author_len = prs
+        .iter()
+        .map(|p| UnicodeWidthStr::width(p.pr.author.as_str()))
+        .max()
+        .unwrap_or(6);
     let max_num_len = prs
         .iter()
         .map(|p| {
@@ -158,19 +195,20 @@ fn build_lines(
     // but allow longer statuses like "CI running (123m)" without truncation.
     let status_w = max_status_len.clamp(12, 34);
     let num_w = max_num_len.clamp(4, 8);
+    let author_w = max_author_len.clamp(6, 16);
 
     // Ensure title gets at least 16 chars; repo uses remaining but capped.
     let min_title_w = 16usize;
-    let max_repo_w = 40usize;
+    let max_repo_w = 35usize;
     let mut repo_w = max_repo_len.min(max_repo_w);
 
     // Compute remaining for title and shrink repo if needed.
-    let fixed = prefix_w + repo_w + sep_w + num_w + sep_w + status_w + sep_w;
+    let fixed = prefix_w + repo_w + sep_w + author_w + sep_w + num_w + sep_w + status_w + sep_w;
     let mut title_w = iw.saturating_sub(fixed);
     if title_w < min_title_w {
         let missing = min_title_w - title_w;
         repo_w = repo_w.saturating_sub(missing);
-        let fixed2 = prefix_w + repo_w + sep_w + num_w + sep_w + status_w + sep_w;
+        let fixed2 = prefix_w + repo_w + sep_w + author_w + sep_w + num_w + sep_w + status_w + sep_w;
         title_w = iw.saturating_sub(fixed2);
     }
     if title_w < 8 {
@@ -202,8 +240,9 @@ fn build_lines(
             inner_height,
             Line::from(Span::styled(
                 format!(
-                    "  {}  {}  {}  {}",
+                    "  {}  {}  {}  {}  {}",
                     pad_right("REPO", repo_w),
+                    pad_right("AUTHOR", author_w),
                     pad_right("PR", num_w),
                     pad_right("TITLE", title_w),
                     pad_right("STATUS", status_w)
@@ -227,6 +266,9 @@ fn build_lines(
             let prefix = if is_selected { "> " } else { "  " };
             let repo = truncate_ellipsis(&format!("{}/{}", pr.pr.owner, pr.pr.repo), repo_w);
             let repo = pad_right(&repo, repo_w);
+
+            let author = truncate_ellipsis(&pr.pr.author, author_w);
+            let author = pad_right(&author, author_w);
 
             let num = truncate_ellipsis(&format!("#{}", pr.pr.number), num_w);
             let num = pad_right(&num, num_w);
@@ -252,7 +294,7 @@ fn build_lines(
             };
 
             let line = Line::from(Span::styled(
-                format!("{prefix}{repo}  {num}  {title}  {status}"),
+                format!("{prefix}{repo}  {author}  {num}  {title}  {status}"),
                 style,
             ));
             push_line(&mut lines, inner_height, line);
@@ -270,6 +312,123 @@ fn build_lines(
     }
 
     (lines, visible_pr_indices)
+}
+
+fn build_footer(inner_width: u16, mode: ViewMode) -> Line<'static> {
+    #[derive(Clone)]
+    struct Seg {
+        text: String,
+        style: Style,
+    }
+    fn keycap(k: &str) -> Seg {
+        Seg {
+            text: format!("[{k}]"),
+            style: Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        }
+    }
+    fn label(s: &str) -> Seg {
+        Seg {
+            text: s.to_string(),
+            style: Style::default().fg(Color::Gray),
+        }
+    }
+    fn sep() -> Seg {
+        Seg {
+            text: "  ".to_string(),
+            style: Style::default(),
+        }
+    }
+
+    let mut segs: Vec<Seg> = Vec::new();
+    match mode {
+        ViewMode::List => {
+            segs.extend([
+                keycap("q"), label("quit"), sep(),
+                keycap("r"), label("refresh"), sep(),
+                keycap("Enter"), label("open"), sep(),
+                keycap("Tab"), label("details"), sep(),
+                keycap("↑/↓"), label("move"),
+            ]);
+        }
+        ViewMode::Details => {
+            segs.extend([
+                keycap("Tab"), label("back"), sep(),
+                keycap("Enter"), label("open"), sep(),
+                keycap("r"), label("refresh"), sep(),
+                keycap("q"), label("quit"),
+            ]);
+        }
+    }
+
+    let total_w: usize = segs
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.text.as_str()))
+        .sum();
+    let iw = inner_width as usize;
+
+    // If it doesn't fit, fall back to a plain truncated hint (still right-aligned).
+    if total_w > iw {
+        let hint = match mode {
+            ViewMode::List => "[q] quit  [r] refresh  [Enter] open  [Tab] details  [↑/↓] move",
+            ViewMode::Details => "[Tab] back  [Enter] open  [r] refresh  [q] quit",
+        };
+        let s = truncate_ellipsis(hint, iw);
+        let pad = iw.saturating_sub(UnicodeWidthStr::width(s.as_str()));
+        return Line::from(vec![
+            Span::raw(std::iter::repeat(' ').take(pad).collect::<String>()),
+            Span::styled(s, Style::default().fg(Color::Gray)),
+        ]);
+    }
+
+    let pad = iw.saturating_sub(total_w);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::raw(std::iter::repeat(' ').take(pad).collect::<String>()));
+    for s in segs {
+        spans.push(Span::styled(s.text, s.style));
+    }
+    Line::from(spans)
+}
+
+fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16) -> Vec<Line<'static>> {
+    let iw = inner_width as usize;
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let now = now_unix();
+
+    // Title line
+    out.push(Line::from(Span::styled(
+        truncate_ellipsis("DETAILS", iw),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    out.push(Line::from(Span::raw(std::iter::repeat('─').take(iw).collect::<String>())));
+
+    let rows = [
+        ("Repo", format!("{}/{}", pr.pr.owner, pr.pr.repo)),
+        ("PR", format!("#{}", pr.pr.number)),
+        ("Author", pr.pr.author.clone()),
+        ("Title", pr.pr.title.clone()),
+        ("Status", pr.display_status.clone()),
+        ("Updated", human_age(now, pr.pr.updated_at_unix)),
+        ("URL", pr.pr.url.clone()),
+        ("Commit", pr.pr.last_commit_sha.clone().unwrap_or_else(|| "none".to_string())),
+        (
+            "Opened",
+            pr.last_opened_at
+                .map(|t| human_age(now, t))
+                .unwrap_or_else(|| "never".to_string()),
+        ),
+    ];
+
+    for (k, v) in rows {
+        if (out.len() as u16) >= inner_height {
+            break;
+        }
+        let line = format!("{k}: {v}");
+        out.push(Line::from(Span::raw(truncate_ellipsis(&line, iw))));
+    }
+
+    out
 }
 
 fn clamp_selection(selected: &mut usize, visible_len: usize) {
@@ -304,9 +463,31 @@ pub fn run_tui(
             .map_err(|e| format!("Failed to read terminal size: {e}"))?;
         let inner_height = area.height.saturating_sub(2); // borders
         let inner_width = area.width.saturating_sub(2); // borders
-        let (lines, visible) = build_lines(&state.prs, inner_width, inner_height, state.selected_idx);
+        let content_height = inner_height.saturating_sub(1); // reserve one line for footer
+
+        let (mut lines, visible) = if state.mode == ViewMode::List {
+            let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx);
+            (l, v)
+        } else {
+            let key = state.details_pr_key.clone();
+            let maybe = key.and_then(|k| state.prs.iter().find(|p| p.pr.pr_key == k).cloned());
+            if let Some(pr) = maybe {
+                (build_details_lines(&pr, inner_width, content_height), Vec::new())
+            } else {
+                state.mode = ViewMode::List;
+                let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx);
+                (l, v)
+            }
+        };
+        // Footer
+        if (lines.len() as u16) < inner_height {
+            lines.push(build_footer(inner_width, state.mode));
+        }
+
         last_visible = visible;
-        clamp_selection(&mut state.selected_idx, last_visible.len());
+        if state.mode == ViewMode::List {
+            clamp_selection(&mut state.selected_idx, last_visible.len());
+        }
 
         terminal
             .draw(|f| {
@@ -335,18 +516,39 @@ pub fn run_tui(
                         state.prs = new_prs;
                         // selection clamped next loop after recompute of visible items
                     }
+                    KeyCode::Tab => {
+                        if state.mode == ViewMode::List {
+                            if let Some(pr_idx) = last_visible.get(state.selected_idx).copied() {
+                                if let Some(pr) = state.prs.get(pr_idx) {
+                                    state.details_pr_key = Some(pr.pr.pr_key.clone());
+                                    state.mode = ViewMode::Details;
+                                }
+                            }
+                        } else {
+                            state.mode = ViewMode::List;
+                        }
+                    }
                     KeyCode::Up => {
-                        if state.selected_idx > 0 {
+                        if state.mode == ViewMode::List && state.selected_idx > 0 {
                             state.selected_idx -= 1;
                         }
                     }
                     KeyCode::Down => {
-                        if state.selected_idx + 1 < last_visible.len() {
+                        if state.mode == ViewMode::List && state.selected_idx + 1 < last_visible.len() {
                             state.selected_idx += 1;
                         }
                     }
                     KeyCode::Enter => {
-                        if let Some(pr_idx) = last_visible.get(state.selected_idx).copied() {
+                        let pr_idx_opt = if state.mode == ViewMode::List {
+                            last_visible.get(state.selected_idx).copied()
+                        } else {
+                            state
+                                .details_pr_key
+                                .as_ref()
+                                .and_then(|k| state.prs.iter().position(|p| &p.pr.pr_key == k))
+                        };
+
+                        if let Some(pr_idx) = pr_idx_opt {
                             if let Some(pr) = state.prs.get_mut(pr_idx) {
                                 open_in_browser(&pr.pr.url);
                                 let ts = now_unix();
