@@ -55,7 +55,6 @@ struct RequestedReviewer {
     #[serde(rename = "__typename")]
     typename: Option<String>,
     login: Option<String>, // User
-    slug: Option<String>,  // Team
 }
 
 #[derive(Debug, serde::Deserialize)]

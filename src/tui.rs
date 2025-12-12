@@ -518,7 +518,6 @@ pub fn run_tui(
     let mut terminal: Terminal<CrosstermBackend<Stdout>> =
         Terminal::new(backend).map_err(|e| format!("Failed to init terminal: {e}"))?;
 
-    let mut last_visible: Vec<usize> = Vec::new();
     let mut refresh_rx: Option<mpsc::Receiver<Result<Vec<UiPr>, String>>> = None;
 
     if start_refresh_immediately && !state.refreshing {
@@ -580,10 +579,9 @@ pub fn run_tui(
             }
         };
         let footer_line = build_footer(inner_width, state.mode, state.refreshing, state.shimmer_phase);
-
-        last_visible = visible;
+        let visible_for_events = visible;
         if state.mode == ViewMode::List {
-            clamp_selection(&mut state.selected_idx, last_visible.len());
+            clamp_selection(&mut state.selected_idx, visible_for_events.len());
         }
 
         terminal
@@ -632,7 +630,7 @@ pub fn run_tui(
                     }
                     KeyCode::Tab => {
                         if state.mode == ViewMode::List {
-                            if let Some(pr_idx) = last_visible.get(state.selected_idx).copied() {
+                            if let Some(pr_idx) = visible_for_events.get(state.selected_idx).copied() {
                                 if let Some(pr) = state.prs.get(pr_idx) {
                                     state.details_pr_key = Some(pr.pr.pr_key.clone());
                                     state.mode = ViewMode::Details;
@@ -648,13 +646,13 @@ pub fn run_tui(
                         }
                     }
                     KeyCode::Down => {
-                        if state.mode == ViewMode::List && state.selected_idx + 1 < last_visible.len() {
+                        if state.mode == ViewMode::List && state.selected_idx + 1 < visible_for_events.len() {
                             state.selected_idx += 1;
                         }
                     }
                     KeyCode::Enter => {
                         let pr_idx_opt = if state.mode == ViewMode::List {
-                            last_visible.get(state.selected_idx).copied()
+                            visible_for_events.get(state.selected_idx).copied()
                         } else {
                             state
                                 .details_pr_key

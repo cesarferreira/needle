@@ -1,4 +1,4 @@
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -158,16 +158,5 @@ pub fn set_last_opened_at(conn: &Connection, pr_key: &str, ts: i64) -> Result<()
     }
     Ok(())
 }
-
-pub fn get_last_opened_at(conn: &Connection, pr_key: &str) -> Result<Option<i64>, String> {
-    conn.query_row(
-        "SELECT last_opened_at FROM prs WHERE pr_key = ?1",
-        params![pr_key],
-        |r| r.get(0),
-    )
-    .optional()
-    .map_err(|e| format!("Failed to read last_opened_at: {e}"))
-}
-
 
 

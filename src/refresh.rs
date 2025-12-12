@@ -18,8 +18,6 @@ pub struct UiPr {
     pub score: i32,
     pub category: Category,
     pub display_status: String,
-    pub is_new_ci_failure: bool,
-    pub is_new_review_request: bool,
     pub last_opened_at: Option<i64>,
 }
 
@@ -80,8 +78,6 @@ pub fn load_cached(conn: &Connection, cutoff_days: i64) -> Result<Vec<UiPr>, Str
             score,
             category,
             display_status,
-            is_new_ci_failure,
-            is_new_review_request: is_new_review,
             last_opened_at: row.last_opened_at,
         });
     }
@@ -251,8 +247,6 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64) -> Re
             score,
             category,
             display_status,
-            is_new_ci_failure: new_ci_failure,
-            is_new_review_request: new_review,
             last_opened_at,
         });
     }
