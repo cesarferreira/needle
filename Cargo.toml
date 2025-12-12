@@ -1,0 +1,14 @@
+[package]
+name = "needle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+ratatui = "0.29"
+crossterm = "0.28"
+octocrab = "0.44"
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+unicode-width = "0.1"
