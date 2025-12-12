@@ -1,4 +1,4 @@
-use crate::model::{CiState, Pr, ReviewState};
+use crate::model::{CiCheck, CiCheckState, CiState, Pr, ReviewState};
 use crate::timeutil::{parse_github_datetime_to_unix, unix_to_ymd};
 use octocrab::Octocrab;
 use std::collections::HashMap;
@@ -60,6 +60,28 @@ struct RequestedReviewer {
 #[derive(Debug, serde::Deserialize)]
 struct StatusCheckRollup {
     state: Option<String>,
+    contexts: Option<StatusContexts>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StatusContexts {
+    nodes: Option<Vec<StatusContextNode>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StatusContextNode {
+    #[serde(rename = "__typename")]
+    typename: Option<String>,
+    // CheckRun
+    name: Option<String>,
+    conclusion: Option<String>,
+    #[serde(rename = "detailsUrl")]
+    details_url: Option<String>,
+    // StatusContext
+    context: Option<String>,
+    state: Option<String>,
+    #[serde(rename = "targetUrl")]
+    target_url: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -199,7 +221,24 @@ query($page_size: Int!, $cursor: String) {
         commits(last: 1) {
           nodes {
             commit {
-              statusCheckRollup { state }
+              statusCheckRollup {
+                state
+                contexts(first: 50) {
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      name
+                      conclusion
+                      detailsUrl
+                    }
+                    ... on StatusContext {
+                      context
+                      state
+                      targetUrl
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -236,7 +275,24 @@ query($page_size: Int!, $cursor: String, $search_query: String!) {
         commits(last: 1) {
           nodes {
             commit {
-              statusCheckRollup { state }
+              statusCheckRollup {
+                state
+                contexts(first: 50) {
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      name
+                      conclusion
+                      detailsUrl
+                    }
+                    ... on StatusContext {
+                      context
+                      state
+                      targetUrl
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -271,6 +327,68 @@ fn map_ci_state(node: &PullRequestNode) -> CiState {
     }
 }
 
+fn map_ci_checks(node: &PullRequestNode) -> Vec<CiCheck> {
+    let Some(commits) = &node.commits else { return Vec::new() };
+    let Some(nodes) = &commits.nodes else { return Vec::new() };
+    let Some(first) = nodes.first() else { return Vec::new() };
+    let Some(commit) = &first.commit else { return Vec::new() };
+    let Some(rollup) = &commit.status_check_rollup else { return Vec::new() };
+    let Some(ctxs) = &rollup.contexts else { return Vec::new() };
+    let Some(nodes) = &ctxs.nodes else { return Vec::new() };
+
+    let mut out = Vec::new();
+    for n in nodes {
+        match n.typename.as_deref() {
+            Some("CheckRun") => {
+                let name = n.name.clone().unwrap_or_else(|| "check".to_string());
+                let state = match n.conclusion.as_deref() {
+                    Some("SUCCESS") => CiCheckState::Success,
+                    Some("FAILURE") | Some("ERROR") | Some("TIMED_OUT") | Some("STARTUP_FAILURE") => CiCheckState::Failure,
+                    Some("NEUTRAL") | Some("SKIPPED") | Some("STALE") | Some("CANCELLED") | Some("ACTION_REQUIRED") => CiCheckState::Neutral,
+                    None => CiCheckState::Running,
+                    _ => CiCheckState::None,
+                };
+                out.push(CiCheck {
+                    name,
+                    state,
+                    url: n.details_url.clone(),
+                });
+            }
+            Some("StatusContext") => {
+                let name = n.context.clone().unwrap_or_else(|| "status".to_string());
+                let state = match n.state.as_deref() {
+                    Some("SUCCESS") => CiCheckState::Success,
+                    Some("FAILURE") | Some("ERROR") => CiCheckState::Failure,
+                    Some("PENDING") | Some("EXPECTED") => CiCheckState::Running,
+                    _ => CiCheckState::None,
+                };
+                out.push(CiCheck {
+                    name,
+                    state,
+                    url: n.target_url.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // Stable ordering: failed first, then running, then success, then name.
+    out.sort_by(|a, b| {
+        let rank = |s: &CiCheckState| match s {
+            CiCheckState::Failure => 0,
+            CiCheckState::Running => 1,
+            CiCheckState::Success => 2,
+            CiCheckState::Neutral => 3,
+            CiCheckState::None => 4,
+        };
+        rank(&a.state)
+            .cmp(&rank(&b.state))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    out
+}
+
 fn map_review_state(node: &PullRequestNode, is_requested: bool) -> ReviewState {
     if is_requested {
         return ReviewState::Requested;
@@ -295,6 +413,7 @@ fn is_review_requested_by_user(node: &PullRequestNode, viewer_login: &str) -> bo
 
 fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
     let ci_state = map_ci_state(&node);
+    let ci_checks = map_ci_checks(&node);
     let last_commit_sha = node.head_ref_oid.clone();
     let review_state = map_review_state(&node, is_requested);
     let owner = node.repository.owner.login;
@@ -318,6 +437,7 @@ fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
         updated_at_unix,
         last_commit_sha,
         ci_state,
+        ci_checks,
         review_state,
     })
 }

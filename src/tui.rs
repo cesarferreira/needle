@@ -31,6 +31,7 @@ pub struct AppState {
     pub(crate) details_pr_key: Option<String>,
     pub(crate) refreshing: bool,
     pub(crate) shimmer_phase: u8,
+    pub(crate) details_ci_selected: usize,
 }
 
 impl AppState {
@@ -42,6 +43,7 @@ impl AppState {
             details_pr_key: None,
             refreshing: false,
             shimmer_phase: 0,
+            details_ci_selected: 0,
         }
     }
 }
@@ -405,7 +407,7 @@ fn build_footer(inner_width: u16, mode: ViewMode, refreshing: bool, shimmer_phas
         ViewMode::Details => {
             segs.extend([
                 keycap("Tab"), label("back"), sep(),
-                keycap("Enter"), label("open"), sep(),
+                keycap("Enter"), label("open check"), sep(),
                 keycap("r"),
                 if refreshing {
                     Seg {
@@ -417,6 +419,8 @@ fn build_footer(inner_width: u16, mode: ViewMode, refreshing: bool, shimmer_phas
                 },
                 sep(),
                 keycap("q"), label("quit"),
+                sep(),
+                keycap("↑/↓"), label("select"),
             ]);
         }
     }
@@ -444,7 +448,7 @@ fn build_footer(inner_width: u16, mode: ViewMode, refreshing: bool, shimmer_phas
     Line::from(spans)
 }
 
-fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16) -> Vec<Line<'static>> {
+fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_selected: usize) -> Vec<Line<'static>> {
     let iw = inner_width as usize;
     let mut out: Vec<Line<'static>> = Vec::new();
     let now = now_unix();
@@ -488,6 +492,79 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16) -> Vec<Li
             Span::styled(key, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             Span::styled(truncate_ellipsis(&val, val_w), Style::default().fg(Color::White)),
         ]));
+    }
+
+    // CI checks list
+    if (out.len() as u16) < inner_height {
+        out.push(Line::from(Span::raw("")));
+    }
+    if (out.len() as u16) < inner_height {
+        out.push(Line::from(Span::styled(
+            "CI CHECKS".to_string(),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )));
+    }
+    if (out.len() as u16) < inner_height {
+        out.push(Line::from(Span::styled(
+            std::iter::repeat('─').take(iw).collect::<String>(),
+            Style::default().fg(Color::Gray),
+        )));
+    }
+
+    if pr.pr.ci_checks.is_empty() {
+        if (out.len() as u16) < inner_height {
+            out.push(Line::from(Span::styled(
+                "No check runs".to_string(),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    } else {
+        let mut failed: Vec<String> = pr
+            .pr
+            .ci_checks
+            .iter()
+            .filter(|c| c.state.is_failure())
+            .map(|c| c.name.clone())
+            .collect();
+        failed.truncate(3);
+        if !failed.is_empty() && (out.len() as u16) < inner_height {
+            out.push(Line::from(Span::styled(
+                format!("Failed: {}", failed.join(", ")),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+        }
+
+        for (idx, c) in pr.pr.ci_checks.iter().enumerate() {
+            if (out.len() as u16) >= inner_height {
+                break;
+            }
+            let is_sel = idx == ci_selected;
+            let prefix = if is_sel { "> " } else { "  " };
+            let (icon, col) = match c.state {
+                crate::model::CiCheckState::Success => ("✅", Color::Green),
+                crate::model::CiCheckState::Failure => ("❌", Color::Red),
+                crate::model::CiCheckState::Running => ("🟡", Color::Yellow),
+                crate::model::CiCheckState::Neutral => ("➖", Color::Gray),
+                crate::model::CiCheckState::None => ("⏺", Color::Gray),
+            };
+            let name = truncate_ellipsis(&c.name, iw.saturating_sub(6));
+            let base = if is_sel {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            out.push(Line::from(vec![
+                Span::styled(prefix.to_string(), base.fg(Color::White)),
+                Span::styled(format!("{icon} "), base.fg(col).add_modifier(Modifier::BOLD)),
+                Span::styled(name, base.fg(Color::White)),
+            ]));
+        }
+        if (out.len() as u16) < inner_height {
+            out.push(Line::from(Span::styled(
+                "Enter: open selected check".to_string(),
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            )));
+        }
     }
 
     out
@@ -571,7 +648,7 @@ pub fn run_tui(
             let key = state.details_pr_key.clone();
             let maybe = key.and_then(|k| state.prs.iter().find(|p| p.pr.pr_key == k).cloned());
             if let Some(pr) = maybe {
-                (build_details_lines(&pr, inner_width, content_height), Vec::new())
+                (build_details_lines(&pr, inner_width, content_height, state.details_ci_selected), Vec::new())
             } else {
                 state.mode = ViewMode::List;
                 let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx);
@@ -634,6 +711,7 @@ pub fn run_tui(
                                 if let Some(pr) = state.prs.get(pr_idx) {
                                     state.details_pr_key = Some(pr.pr.pr_key.clone());
                                     state.mode = ViewMode::Details;
+                                    state.details_ci_selected = 0;
                                 }
                             }
                         } else {
@@ -641,28 +719,58 @@ pub fn run_tui(
                         }
                     }
                     KeyCode::Up => {
-                        if state.mode == ViewMode::List && state.selected_idx > 0 {
-                            state.selected_idx -= 1;
+                        if state.mode == ViewMode::List {
+                            if state.selected_idx > 0 {
+                                state.selected_idx -= 1;
+                            }
+                        } else {
+                            if state.details_ci_selected > 0 {
+                                state.details_ci_selected -= 1;
+                            }
                         }
                     }
                     KeyCode::Down => {
-                        if state.mode == ViewMode::List && state.selected_idx + 1 < visible_for_events.len() {
-                            state.selected_idx += 1;
+                        if state.mode == ViewMode::List {
+                            if state.selected_idx + 1 < visible_for_events.len() {
+                                state.selected_idx += 1;
+                            }
+                        } else {
+                            // Clamp based on selected PR's available CI checks.
+                            let ci_len = state
+                                .details_pr_key
+                                .as_ref()
+                                .and_then(|k| state.prs.iter().find(|p| &p.pr.pr_key == k))
+                                .map(|p| p.pr.ci_checks.len())
+                                .unwrap_or(0);
+                            if ci_len > 0 && state.details_ci_selected + 1 < ci_len {
+                                state.details_ci_selected += 1;
+                            }
                         }
                     }
                     KeyCode::Enter => {
-                        let pr_idx_opt = if state.mode == ViewMode::List {
-                            visible_for_events.get(state.selected_idx).copied()
+                        if state.mode == ViewMode::List {
+                            if let Some(pr_idx) = visible_for_events.get(state.selected_idx).copied() {
+                                if let Some(pr) = state.prs.get_mut(pr_idx) {
+                                    open_in_browser(&pr.pr.url);
+                                    let ts = now_unix();
+                                    pr.last_opened_at = Some(ts);
+                                    let _ = set_last_opened_at(conn, &pr.pr.pr_key, ts);
+                                }
+                            }
                         } else {
-                            state
+                            // In details view, Enter opens the selected CI check URL if present, else PR URL.
+                            let pr_opt = state
                                 .details_pr_key
                                 .as_ref()
-                                .and_then(|k| state.prs.iter().position(|p| &p.pr.pr_key == k))
-                        };
-
-                        if let Some(pr_idx) = pr_idx_opt {
-                            if let Some(pr) = state.prs.get_mut(pr_idx) {
-                                open_in_browser(&pr.pr.url);
+                                .and_then(|k| state.prs.iter_mut().find(|p| &p.pr.pr_key == k));
+                            if let Some(pr) = pr_opt {
+                                let url = pr
+                                    .pr
+                                    .ci_checks
+                                    .get(state.details_ci_selected)
+                                    .and_then(|c| c.url.as_deref())
+                                    .unwrap_or(pr.pr.url.as_str());
+                                open_in_browser(url);
                                 let ts = now_unix();
                                 pr.last_opened_at = Some(ts);
                                 let _ = set_last_opened_at(conn, &pr.pr.pr_key, ts);

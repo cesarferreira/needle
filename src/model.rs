@@ -35,6 +35,28 @@ impl ReviewState {
 }
 
 #[derive(Debug, Clone)]
+pub enum CiCheckState {
+    Success,
+    Failure,
+    Running,
+    Neutral,
+    None,
+}
+
+impl CiCheckState {
+    pub fn is_failure(&self) -> bool {
+        matches!(self, CiCheckState::Failure)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CiCheck {
+    pub name: String,
+    pub state: CiCheckState,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Pr {
     pub pr_key: String, // "{owner}/{repo}#{number}"
     pub owner: String,
@@ -47,6 +69,7 @@ pub struct Pr {
     pub updated_at_unix: i64,
     pub last_commit_sha: Option<String>,
     pub ci_state: CiState,
+    pub ci_checks: Vec<CiCheck>,
     pub review_state: ReviewState,
 }
 

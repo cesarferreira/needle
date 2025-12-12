@@ -64,6 +64,7 @@ pub fn load_cached(conn: &Connection, cutoff_days: i64) -> Result<Vec<UiPr>, Str
             updated_at_unix,
             last_commit_sha: row.last_commit_sha.clone(),
             ci_state: parse_ci_state(row.last_ci_state.as_deref()),
+            ci_checks: Vec::new(),
             review_state: parse_review_state(row.last_review_state.as_deref()),
         };
 
