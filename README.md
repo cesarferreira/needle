@@ -17,6 +17,12 @@ export GITHUB_TOKEN=...
 cargo run
 ```
 
+### Demo mode (no GitHub token)
+
+```bash
+cargo run -- --demo
+```
+
 ### Filter window (days)
 
 By default it only shows PRs updated in the **last 30 days**.
@@ -127,5 +133,4 @@ Sort:
 
 - **Missing token**: set `GITHUB_TOKEN`.
 - **Not a TTY**: run in an interactive terminal (not a non-tty runner).
-
 

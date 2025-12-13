@@ -1,4 +1,5 @@
 use crate::db::{DbPrRow, delete_prs_not_in, load_all_prs, now_unix, upsert_pr};
+use crate::demo::{generate_demo_prs, next_demo_tick, seeded_last_opened_at};
 use crate::github::fetch_attention_prs;
 use crate::model::{CiState, Pr, ReviewState};
 use octocrab::Octocrab;
@@ -225,7 +226,9 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64) -> Re
         let new_review = is_new_review_request(&pr, old);
         let new_ci_failure = is_new_ci_failure(&pr, old);
 
-        let last_opened_at = old.and_then(|r| r.last_opened_at);
+        let last_opened_at = old
+            .and_then(|r| r.last_opened_at)
+            .or_else(|| seeded_last_opened_at(&pr.pr_key, now));
 
         let db_row = DbPrRow {
             pr_key: pr.pr_key.clone(),
@@ -267,5 +270,60 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64) -> Re
     Ok(out)
 }
 
+pub fn refresh_demo(conn: &Connection, cutoff_days: i64) -> Result<Vec<UiPr>, String> {
+    let existing: HashMap<String, DbPrRow> = load_all_prs(conn)?;
+    let now = now_unix();
+    let cutoff_ts = now.saturating_sub(cutoff_days.saturating_mul(86_400));
 
+    let tick = next_demo_tick();
+    let prs = generate_demo_prs(now, tick);
+    let prs: Vec<Pr> = prs.into_iter().filter(|p| p.updated_at_unix >= cutoff_ts).collect();
+    let keep_keys: Vec<String> = prs.iter().map(|p| p.pr_key.clone()).collect();
+
+    let mut out: Vec<UiPr> = Vec::new();
+
+    for pr in prs {
+        let old = existing.get(&pr.pr_key);
+        let new_review = is_new_review_request(&pr, old);
+        let new_ci_failure = is_new_ci_failure(&pr, old);
+
+        let last_opened_at = old.and_then(|r| r.last_opened_at);
+
+        let db_row = DbPrRow {
+            pr_key: pr.pr_key.clone(),
+            owner: pr.owner.clone(),
+            repo: pr.repo.clone(),
+            number: pr.number,
+            title: pr.title.clone(),
+            url: pr.url.clone(),
+            last_commit_sha: pr.last_commit_sha.clone(),
+            last_ci_state: Some(ci_to_db(&pr.ci_state).to_string()),
+            last_review_state: Some(review_to_db(&pr.review_state).to_string()),
+            last_seen_at: Some(now),
+            last_opened_at,
+        };
+        upsert_pr(conn, &db_row, now)?;
+
+        let score = score_pr(&pr, old, now, new_ci_failure);
+        let category = category_for(score);
+        let display_status = status_text(&pr, now, new_ci_failure, new_review);
+
+        out.push(UiPr {
+            pr,
+            score,
+            category,
+            display_status,
+            last_opened_at,
+        });
+    }
+
+    delete_prs_not_in(conn, &keep_keys)?;
+
+    out.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| b.pr.updated_at_unix.cmp(&a.pr.updated_at_unix))
+    });
+    Ok(out)
+}
 
