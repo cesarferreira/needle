@@ -70,7 +70,9 @@ Needle uses the GitHub API, so you’ll need a Personal Access Token.
 export GITHUB_TOKEN="ghp_..."
 ```
 
-## What it shows (V1 scope)
+Add it to your bashrc/zshrc for future usage.
+
+## What it shows
 
 Included PRs:
 - PRs **authored by you**
@@ -99,17 +101,6 @@ Details view:
 - `r`: refresh now
 - `q`: quit
 
-## UI
-
-- Single-screen list, visually grouped by derived category:
-  - **NEEDS YOU** (score >= 40)
-  - **WAITING** (0..39)
-  - **STALE** (< 0)
-- Empty sections are hidden.
-- Rows are dimmed if `last_opened_at` is recent.
-- No scrolling beyond terminal height (truncates to fit).
-- Uses cached SQLite data to render immediately, then refreshes in the background.
-
 ### Details view CI checks
 
 In details view you get a list of CI steps (check runs / status contexts):
@@ -124,7 +115,16 @@ In details view you get a list of CI steps (check runs / status contexts):
 - Auto refresh: every **30s** while on the details view
 - No background async tasks beyond the single refresh worker thread.
 
-## Scoring (hard-coded)
+## Scoring
+
+- Single-screen list, visually grouped by derived category:
+  - **NEEDS YOU** (score >= 40)
+  - **WAITING** (0..39)
+  - **STALE** (< 0)
+- Empty sections are hidden.
+- Rows are dimmed if `last_opened_at` is recent.
+- No scrolling beyond terminal height (truncates to fit).
+- Uses cached SQLite data to render immediately, then refreshes in the background.
 
 Each PR gets a score (higher = more urgent):
 
