@@ -7,6 +7,7 @@
 
   <p>
     <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/rust-2024%20edition-dea584"></a>
+    <a href="https://crates.io/crates/needle-cli"><img alt="Crates.io" src="https://img.shields.io/crates/v/needle-cli"></a>
     <img alt="TUI" src="https://img.shields.io/badge/TUI-ratatui-5f5fff">
     <img alt="Async" src="https://img.shields.io/badge/async-tokio-2f74c0">
     <img alt="Storage" src="https://img.shields.io/badge/cache-sqlite-3b7ddd">
@@ -18,19 +19,27 @@
 
 Open PRs (and individual CI checks) in your browser. Not a full GitHub client—just a focused attention filter.
 
+## Install
+
+```bash
+cargo install needle-cli
+```
+
+This installs the `needle` binary.
+
 ## Quick start
 
 Demo mode (no GitHub token required):
 
 ```bash
-cargo run -- --demo
+needle --demo
 ```
 
 Real mode (requires `GITHUB_TOKEN`):
 
 ```bash
 export GITHUB_TOKEN=...
-cargo run
+needle
 ```
 
 ## Options
@@ -39,13 +48,27 @@ cargo run
 - `--demo`: run with diverse fake data
 
 ```bash
-cargo run -- --days 7
+needle --days 7
 ```
 
 ## Requirements (real mode)
 
 - Rust (stable)
 - A GitHub Personal Access Token in `GITHUB_TOKEN`
+
+## Get a GitHub token
+
+Needle uses the GitHub API, so you’ll need a Personal Access Token.
+
+1. Go to `https://github.com/settings/tokens?type=beta` and create a **Fine-grained** token.
+2. Choose the account/organization that owns the repos you want to scan.
+3. Set **Repository access** to “All repositories” (or select specific repos).
+4. Add **Pull requests: Read-only** permissions.
+5. Copy the token and export it:
+
+```bash
+export GITHUB_TOKEN="ghp_..."
+```
 
 ## What it shows (V1 scope)
 
