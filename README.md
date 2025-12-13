@@ -60,7 +60,7 @@ needle --days 7
 
 Needle uses the GitHub API, so you’ll need a Personal Access Token.
 
-1. Go to `https://github.com/settings/tokens?type=beta` and create a **Fine-grained** token.
+1. Go to https://github.com/settings/tokens?type=beta and create a **Fine-grained** token.
 2. Choose the account/organization that owns the repos you want to scan.
 3. Set **Repository access** to “All repositories” (or select specific repos).
 4. Add **Pull requests: Read-only** permissions.
