@@ -1,35 +1,51 @@
-# needle — PR Attention TUI (Rust)
+<div align="center">
+  <h1>needle</h1>
+  <p>
+    <strong>TUI PR triage for GitHub</strong><br/>
+    Shows the few PRs that need you: review requests, failing CI, and long-running checks.
+  </p>
 
-Terminal-native TUI that shows **only** GitHub pull requests that may require your attention and lets you open a PR (or a CI check) in your browser.
+  <p>
+    <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/rust-2024%20edition-dea584"></a>
+    <img alt="TUI" src="https://img.shields.io/badge/TUI-ratatui-5f5fff">
+    <img alt="Async" src="https://img.shields.io/badge/async-tokio-2f74c0">
+    <img alt="Storage" src="https://img.shields.io/badge/cache-sqlite-3b7ddd">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+  </p>
 
-This is **not** a GitHub client. It’s an **attention filter**.
+  <img src="screenshot.png" width="900" alt="needle screenshot (demo mode)">
+</div>
 
-## Requirements
+Open PRs (and individual CI checks) in your browser. Not a full GitHub client—just a focused attention filter.
 
-- Rust (stable)
-- A GitHub Personal Access Token in `GITHUB_TOKEN` (required)
+## Quick start
 
-## Install / Run
-
-```bash
-cd /Users/cesarferreira/code/github/needle
-export GITHUB_TOKEN=...
-cargo run
-```
-
-### Demo mode (no GitHub token)
+Demo mode (no GitHub token required):
 
 ```bash
 cargo run -- --demo
 ```
 
-### Filter window (days)
+Real mode (requires `GITHUB_TOKEN`):
 
-By default it only shows PRs updated in the **last 30 days**.
+```bash
+export GITHUB_TOKEN=...
+cargo run
+```
+
+## Options
+
+- `--days <N>`: only include PRs updated in the last `N` days (default: `30`)
+- `--demo`: run with diverse fake data
 
 ```bash
 cargo run -- --days 7
 ```
+
+## Requirements (real mode)
+
+- Rust (stable)
+- A GitHub Personal Access Token in `GITHUB_TOKEN`
 
 ## What it shows (V1 scope)
 
@@ -78,33 +94,6 @@ In details view you get a list of CI steps (check runs / status contexts):
 - ❌ failed
 - 🟡 running (shows “running for …” when `startedAt` is available)
 
-## Data storage (SQLite)
-
-Stores a local snapshot for diffing/scoring at:
-- `dirs::data_dir()/needle/prs.sqlite`
-
-Schema (fixed in V1):
-
-```sql
-CREATE TABLE prs (
-  pr_key TEXT PRIMARY KEY,        -- "{owner}/{repo}#{number}"
-  owner TEXT NOT NULL,
-  repo TEXT NOT NULL,
-  number INTEGER NOT NULL,
-  title TEXT NOT NULL,
-  url TEXT NOT NULL,
-
-  last_commit_sha TEXT,
-  last_ci_state TEXT,              -- success | failure | running | none
-  last_review_state TEXT,          -- requested | approved | none
-
-  last_seen_at INTEGER,            -- unix timestamp
-  last_opened_at INTEGER           -- unix timestamp
-);
-```
-
-On refresh, DB rows not in the current “attention set” are removed so cached startup stays consistent.
-
 ## Refresh behavior
 
 - Fetches on startup **in the background** (UI shows cached data immediately).
@@ -134,3 +123,6 @@ Sort:
 - **Missing token**: set `GITHUB_TOKEN`.
 - **Not a TTY**: run in an interactive terminal (not a non-tty runner).
 
+## License
+
+MIT. See `LICENSE`.

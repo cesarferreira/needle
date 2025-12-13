@@ -2,6 +2,10 @@
 name = "needle"
 version = "0.1.0"
 edition = "2024"
+description = "TUI that highlights the GitHub PRs that need you"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/cesarferreira/needle"
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
