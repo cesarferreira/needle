@@ -51,7 +51,7 @@ needle
 needle --days 7
 ```
 
-## Requirements (real mode)
+## Requirements
 
 - Rust (stable)
 - A GitHub Personal Access Token in `GITHUB_TOKEN`

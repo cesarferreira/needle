@@ -6,6 +6,14 @@ description = "TUI that highlights the GitHub PRs that need you"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/cesarferreira/needle"
+include = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "README.md",
+  "LICENSE",
+  "src/**",
+  "public/**",
+]
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
