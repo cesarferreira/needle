@@ -14,7 +14,7 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   </p>
 
-  <img src="screenshot.png" width="900" alt="needle screenshot (demo mode)">
+  <img src="public/screenshot.png" width="900" alt="needle screenshot (demo mode)">
 </div>
 
 Open PRs (and individual CI checks) in your browser. Not a full GitHub client—just a focused attention filter.
