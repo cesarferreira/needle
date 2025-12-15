@@ -1233,13 +1233,27 @@ pub fn run_tui(
                 if state.filter_editing {
                     match (k.code, k.modifiers) {
                         (KeyCode::Up, _) => {
-                            if state.mode == ViewMode::List && state.selected_idx > 0 {
-                                state.selected_idx -= 1;
+                            if state.mode == ViewMode::List {
+                                let n = visible_for_events.len();
+                                if n == 0 {
+                                    // nothing to select
+                                } else if state.selected_idx == 0 {
+                                    state.selected_idx = n - 1;
+                                } else {
+                                    state.selected_idx -= 1;
+                                }
                             }
                         }
                         (KeyCode::Down, _) => {
-                            if state.mode == ViewMode::List && state.selected_idx + 1 < visible_for_events.len() {
-                                state.selected_idx += 1;
+                            if state.mode == ViewMode::List {
+                                let n = visible_for_events.len();
+                                if n == 0 {
+                                    // nothing to select
+                                } else if state.selected_idx + 1 >= n {
+                                    state.selected_idx = 0;
+                                } else {
+                                    state.selected_idx += 1;
+                                }
                             }
                         }
                         (KeyCode::Esc, _) => {
@@ -1404,7 +1418,12 @@ pub fn run_tui(
                     }
                     KeyCode::Up => {
                         if state.mode == ViewMode::List {
-                            if state.selected_idx > 0 {
+                            let n = visible_for_events.len();
+                            if n == 0 {
+                                // nothing to select
+                            } else if state.selected_idx == 0 {
+                                state.selected_idx = n - 1;
+                            } else {
                                 state.selected_idx -= 1;
                             }
                         } else {
@@ -1415,7 +1434,12 @@ pub fn run_tui(
                     }
                     KeyCode::Down => {
                         if state.mode == ViewMode::List {
-                            if state.selected_idx + 1 < visible_for_events.len() {
+                            let n = visible_for_events.len();
+                            if n == 0 {
+                                // nothing to select
+                            } else if state.selected_idx + 1 >= n {
+                                state.selected_idx = 0;
+                            } else {
                                 state.selected_idx += 1;
                             }
                         } else {
