@@ -1,8 +1,7 @@
 <div align="center">
   <h1>needle</h1>
   <p>
-    <strong>TUI PR triage for GitHub</strong><br/>
-    Shows the few PRs that need you: review requests, failing CI, and long-running checks.
+    TUI that shows the few PRs that need you: review requests, failing CI, and long-running checks.
   </p>
 
   <p>
@@ -17,7 +16,6 @@
   <img src="public/screenshot.png" width="900" alt="needle screenshot (demo mode)">
 </div>
 
-Open PRs (and individual CI checks) in your browser. Not a full GitHub client—just a focused attention filter.
 
 ## Install
 
