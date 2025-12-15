@@ -8,7 +8,7 @@ mod tui;
 
 use crate::db::{db_path, open_db};
 use crate::refresh::{load_cached, refresh, refresh_demo, ScopeFilters};
-use crate::tui::{AppState, run_tui};
+use crate::tui::{AppState, UiPrefs, run_tui};
 use clap::Parser;
 use octocrab::Octocrab;
 use std::sync::Arc;
@@ -43,6 +43,18 @@ struct CliArgs {
     /// Emit a terminal bell on important new events.
     #[arg(long)]
     bell: bool,
+
+    /// Hide PR numbers column in list view.
+    #[arg(long)]
+    hide_pr_numbers: bool,
+
+    /// Hide repository column in list view.
+    #[arg(long)]
+    hide_repo: bool,
+
+    /// Hide author column in list view.
+    #[arg(long)]
+    hide_author: bool,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -53,6 +65,11 @@ async fn main() {
         orgs: args.org.clone(),
         include_repos: args.include.clone(),
         exclude_repos: args.exclude.clone(),
+    };
+    let ui = UiPrefs {
+        hide_pr_numbers: args.hide_pr_numbers,
+        hide_repo: args.hide_repo,
+        hide_author: args.hide_author,
     };
 
     if args.demo {
@@ -65,7 +82,7 @@ async fn main() {
         // Seed once, then run again so some CI failures look "unchanged" on first render.
         let _ = refresh_demo(&conn, days, &scope);
         let demo_prs = refresh_demo(&conn, days, &scope).unwrap_or_else(|_e| Vec::new());
-        let state = AppState::new(demo_prs);
+        let state = AppState::new(demo_prs, ui);
 
         let demo_path_for_refresh = demo_path.clone();
         let scope_for_refresh = scope.clone();
@@ -107,7 +124,7 @@ async fn main() {
 
     // Fast startup: render cached SQLite snapshot immediately, then refresh in background.
     let cached = load_cached(&conn, days, &scope).unwrap_or_else(|_e| Vec::new());
-    let state = AppState::new(cached);
+    let state = AppState::new(cached, ui);
 
     let handle = tokio::runtime::Handle::current();
     let db_path_for_refresh = path.clone();

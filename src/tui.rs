@@ -27,6 +27,23 @@ pub enum ViewMode {
     Details,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct UiPrefs {
+    pub hide_pr_numbers: bool,
+    pub hide_repo: bool,
+    pub hide_author: bool,
+}
+
+impl Default for UiPrefs {
+    fn default() -> Self {
+        Self {
+            hide_pr_numbers: false,
+            hide_repo: false,
+            hide_author: false,
+        }
+    }
+}
+
 pub struct AppState {
     pub prs: Vec<UiPr>,
     pub selected_idx: usize, // index into visible_pr_indices
@@ -36,6 +53,7 @@ pub struct AppState {
     pub(crate) shimmer_phase: u8,
     pub(crate) details_ci_selected: usize,
     pub(crate) details_last_auto_refresh: Option<Instant>,
+    pub(crate) ui: UiPrefs,
 
     // List filters/search.
     pub(crate) filter_query: String,
@@ -48,7 +66,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(prs: Vec<UiPr>) -> Self {
+    pub fn new(prs: Vec<UiPr>, ui: UiPrefs) -> Self {
         Self {
             prs,
             selected_idx: 0,
@@ -58,6 +76,7 @@ impl AppState {
             shimmer_phase: 0,
             details_ci_selected: 0,
             details_last_auto_refresh: None,
+            ui,
             filter_query: String::new(),
             filter_editing: false,
             filter_edit: String::new(),
@@ -228,6 +247,7 @@ fn build_list_lines(
     selected_visible_idx: usize,
     filtered: &[usize],
     filter_banner: Option<&str>,
+    ui: UiPrefs,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     // We build rendered lines (headers/dividers/rows/blanks) up to inner_height.
     // Also track which `prs` indices are visible, in order, so selection works.
@@ -254,35 +274,47 @@ fn build_list_lines(
     }
 
     // Table-ish column sizing (dynamic; only truncates when the terminal width forces it).
-    // Columns: prefix(2) repo(var) author(var) #num(var) title(var) status(var)
+    // Columns: prefix(2) [repo] [author] [#num] title status
     let iw = inner_width as usize;
     let prefix_w = 2usize;
     let sep_w = 2usize; // two spaces between columns
 
-    let max_repo_len = filtered
-        .iter()
-        .filter_map(|&i| prs.get(i))
-        .map(|p| {
-            let s = format!("{}/{}", p.pr.owner, p.pr.repo);
-            UnicodeWidthStr::width(s.as_str())
-        })
-        .max()
-        .unwrap_or(10);
-    let max_author_len = filtered
-        .iter()
-        .filter_map(|&i| prs.get(i))
-        .map(|p| UnicodeWidthStr::width(p.pr.author.as_str()))
-        .max()
-        .unwrap_or(6);
-    let max_num_len = filtered
-        .iter()
-        .filter_map(|&i| prs.get(i))
-        .map(|p| {
-            let s = format!("#{}", p.pr.number);
-            UnicodeWidthStr::width(s.as_str())
-        })
-        .max()
-        .unwrap_or(4);
+    let max_repo_len = if ui.hide_repo {
+        0
+    } else {
+        filtered
+            .iter()
+            .filter_map(|&i| prs.get(i))
+            .map(|p| {
+                let s = format!("{}/{}", p.pr.owner, p.pr.repo);
+                UnicodeWidthStr::width(s.as_str())
+            })
+            .max()
+            .unwrap_or(10)
+    };
+    let max_author_len = if ui.hide_author {
+        0
+    } else {
+        filtered
+            .iter()
+            .filter_map(|&i| prs.get(i))
+            .map(|p| UnicodeWidthStr::width(p.pr.author.as_str()))
+            .max()
+            .unwrap_or(6)
+    };
+    let max_num_len = if ui.hide_pr_numbers {
+        0
+    } else {
+        filtered
+            .iter()
+            .filter_map(|&i| prs.get(i))
+            .map(|p| {
+                let s = format!("#{}", p.pr.number);
+                UnicodeWidthStr::width(s.as_str())
+            })
+            .max()
+            .unwrap_or(4)
+    };
     let max_status_len = filtered
         .iter()
         .filter_map(|&i| prs.get(i))
@@ -293,21 +325,26 @@ fn build_list_lines(
     // Reasonable upper bounds so title keeps most of the width,
     // but allow longer statuses like "CI running (123m)" without truncation.
     let status_w = max_status_len.clamp(12, 34);
-    let num_w = max_num_len.clamp(4, 8);
-    let author_w = max_author_len.clamp(6, 16);
+    let num_w = if ui.hide_pr_numbers { 0 } else { max_num_len.clamp(4, 8) };
+    let author_w = if ui.hide_author { 0 } else { max_author_len.clamp(6, 16) };
 
     // Ensure title gets at least 16 chars; repo uses remaining but capped.
     let min_title_w = 16usize;
     let max_repo_w = 35usize;
-    let mut repo_w = max_repo_len.min(max_repo_w);
+    let mut repo_w = if ui.hide_repo { 0 } else { max_repo_len.min(max_repo_w) };
+
+    let repo_block = if ui.hide_repo { 0 } else { repo_w + sep_w };
+    let author_block = if ui.hide_author { 0 } else { author_w + sep_w };
+    let num_block = if ui.hide_pr_numbers { 0 } else { num_w + sep_w };
 
     // Compute remaining for title and shrink repo if needed.
-    let fixed = prefix_w + repo_w + sep_w + author_w + sep_w + num_w + sep_w + status_w + sep_w;
+    let fixed = prefix_w + repo_block + author_block + num_block + status_w + sep_w;
     let mut title_w = iw.saturating_sub(fixed);
     if title_w < min_title_w {
         let missing = min_title_w - title_w;
         repo_w = repo_w.saturating_sub(missing);
-        let fixed2 = prefix_w + repo_w + sep_w + author_w + sep_w + num_w + sep_w + status_w + sep_w;
+        let repo_block2 = if ui.hide_repo { 0 } else { repo_w + sep_w };
+        let fixed2 = prefix_w + repo_block2 + author_block + num_block + status_w + sep_w;
         title_w = iw.saturating_sub(fixed2);
     }
     if title_w < 8 {
@@ -343,14 +380,26 @@ fn build_list_lines(
             &mut lines,
             inner_height,
             Line::from(Span::styled(
-                format!(
-                    "  {}  {}  {}  {}  {}",
-                    pad_right("REPO", repo_w),
-                    pad_right("AUTHOR", author_w),
-                    pad_right("PR", num_w),
-                    pad_right("TITLE", title_w),
-                    pad_right("STATUS", status_w)
-                ),
+                {
+                    let mut s = String::new();
+                    s.push_str("  ");
+                    if !ui.hide_repo {
+                        s.push_str(&pad_right("REPO", repo_w));
+                        s.push_str("  ");
+                    }
+                    if !ui.hide_author {
+                        s.push_str(&pad_right("AUTHOR", author_w));
+                        s.push_str("  ");
+                    }
+                    if !ui.hide_pr_numbers {
+                        s.push_str(&pad_right("PR", num_w));
+                        s.push_str("  ");
+                    }
+                    s.push_str(&pad_right("TITLE", title_w));
+                    s.push_str("  ");
+                    s.push_str(&pad_right("STATUS", status_w));
+                    s
+                },
                 Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
             )),
         );
@@ -367,14 +416,26 @@ fn build_list_lines(
 
             let is_selected = visible_idx == selected_visible_idx;
             let prefix = if is_selected { "> " } else { "  " };
-            let repo = truncate_ellipsis(&format!("{}/{}", pr.pr.owner, pr.pr.repo), repo_w);
-            let repo = pad_right(&repo, repo_w);
+            let repo = if ui.hide_repo {
+                String::new()
+            } else {
+                pad_right(
+                    &truncate_ellipsis(&format!("{}/{}", pr.pr.owner, pr.pr.repo), repo_w),
+                    repo_w,
+                )
+            };
 
-            let author = truncate_ellipsis(&pr.pr.author, author_w);
-            let author = pad_right(&author, author_w);
+            let author = if ui.hide_author {
+                String::new()
+            } else {
+                pad_right(&truncate_ellipsis(&pr.pr.author, author_w), author_w)
+            };
 
-            let num = truncate_ellipsis(&format!("#{}", pr.pr.number), num_w);
-            let num = pad_right(&num, num_w);
+            let num = if ui.hide_pr_numbers {
+                String::new()
+            } else {
+                pad_right(&truncate_ellipsis(&format!("#{}", pr.pr.number), num_w), num_w)
+            };
 
             let title = truncate_ellipsis(&pr.pr.title, title_w);
             let title = pad_right(&title, title_w);
@@ -398,18 +459,24 @@ fn build_list_lines(
                 crate::model::CiState::None => Color::Gray,
             };
 
-            let line = Line::from(vec![
-                Span::styled(prefix.to_string(), base.fg(Color::White)),
-                Span::styled(repo, base.fg(Color::Cyan)),
-                Span::raw("  "),
-                Span::styled(author, base.fg(Color::Magenta)),
-                Span::raw("  "),
-                Span::styled(num, base.fg(Color::Blue).add_modifier(Modifier::BOLD)),
-                Span::raw("  "),
-                Span::styled(title, base.fg(Color::White)),
-                Span::raw("  "),
-                Span::styled(status, base.fg(status_color).add_modifier(Modifier::BOLD)),
-            ]);
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            spans.push(Span::styled(prefix.to_string(), base.fg(Color::White)));
+            if !ui.hide_repo {
+                spans.push(Span::styled(repo, base.fg(Color::Cyan)));
+                spans.push(Span::raw("  "));
+            }
+            if !ui.hide_author {
+                spans.push(Span::styled(author, base.fg(Color::Magenta)));
+                spans.push(Span::raw("  "));
+            }
+            if !ui.hide_pr_numbers {
+                spans.push(Span::styled(num, base.fg(Color::Blue).add_modifier(Modifier::BOLD)));
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(title, base.fg(Color::White)));
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(status, base.fg(status_color).add_modifier(Modifier::BOLD)));
+            let line = Line::from(spans);
             push_line(&mut lines, inner_height, line);
         }
 
@@ -882,7 +949,15 @@ pub fn run_tui(
                 banner = format!("Filter: {}", parts.join("  "));
             }
             let banner_opt = if banner.is_empty() { None } else { Some(banner.as_str()) };
-            let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx, &filtered, banner_opt);
+            let (l, v) = build_list_lines(
+                &state.prs,
+                inner_width,
+                content_height,
+                state.selected_idx,
+                &filtered,
+                banner_opt,
+                state.ui,
+            );
             (l, v)
         } else {
             let key = state.details_pr_key.clone();
@@ -898,7 +973,15 @@ pub fn run_tui(
                     state.only_failing_ci,
                     state.only_review_requested,
                 );
-                let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx, &filtered, None);
+                let (l, v) = build_list_lines(
+                    &state.prs,
+                    inner_width,
+                    content_height,
+                    state.selected_idx,
+                    &filtered,
+                    None,
+                    state.ui,
+                );
                 (l, v)
             }
         };

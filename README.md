@@ -51,6 +51,9 @@ needle
 - `--exclude <owner/repo>`: hide these repos (repeatable or comma-delimited)
 - `--include-team-requests`: include PRs requested to teams you are in (default: user-only)
 - `--bell`: ring terminal bell when a PR enters **NEEDS YOU** or when CI fails (new)
+- `--hide-pr-numbers`: hide PR numbers column
+- `--hide-repo`: hide repository column
+- `--hide-author`: hide author column
 
 ```bash
 needle --days 7
