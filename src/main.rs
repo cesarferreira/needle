@@ -9,7 +9,7 @@ mod tui;
 use crate::db::{db_path, open_db};
 use crate::refresh::{load_cached, refresh, refresh_demo, ScopeFilters};
 use crate::tui::{AppState, UiPrefs, run_tui};
-use clap::{Parser, ArgAction};
+use clap::{ArgAction, Parser};
 use octocrab::Octocrab;
 use std::sync::Arc;
 
@@ -17,8 +17,8 @@ use std::sync::Arc;
 #[command(name = "needle", version, about = "TUI PR triage for GitHub", disable_version_flag = true)]
 struct CliArgs {
     /// Print version information (-v, -V, --version).
-    #[arg(short = 'v', short_alias = 'V', long = "version", action = ArgAction::Version)]
-    _version: bool,
+    #[arg(short = 'v', long = "version", action = ArgAction::Version)]
+    version: (),
 
     /// Only include PRs updated in the last N days.
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(i64).range(0..))]
