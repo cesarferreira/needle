@@ -382,15 +382,10 @@ fn build_list_lines(
             let status = truncate_ellipsis(&pr.display_status, status_w);
             let status = pad_right(&status, status_w);
 
-            let recent_dim = pr
-                .last_opened_at
-                .map(|t| now_unix().saturating_sub(t) <= 3600)
-                .unwrap_or(false);
-
             let base = if is_selected {
                 // Highlight the whole row.
                 Style::default().add_modifier(Modifier::REVERSED)
-            } else if recent_dim {
+            } else if pr.pr.is_draft {
                 Style::default().add_modifier(Modifier::DIM)
             } else {
                 Style::default()

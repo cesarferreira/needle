@@ -27,6 +27,7 @@ struct DemoPrSpec {
     updated_age_secs: i64,
     review: ReviewState,
     ci: CiProfile,
+    is_draft: bool,
 }
 
 fn fnv1a_64(s: &str) -> u64 {
@@ -136,6 +137,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 2 * 3600,
             review: ReviewState::Requested,
             ci: CiProfile::Green,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "orbit",
@@ -146,6 +148,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 28 * 60,
             review: ReviewState::None,
             ci: CiProfile::RedNew,
+            is_draft: true,
         },
         DemoPrSpec {
             owner: "windmill-labs",
@@ -156,6 +159,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 4 * 86400,
             review: ReviewState::None,
             ci: CiProfile::RedStuck,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -166,6 +170,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 19 * 60,
             review: ReviewState::None,
             ci: CiProfile::RunningLong,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "acme-inc",
@@ -176,6 +181,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 6 * 60,
             review: ReviewState::None,
             ci: CiProfile::RunningShort,
+            is_draft: true,
         },
         DemoPrSpec {
             owner: "honeycombio",
@@ -186,6 +192,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 7 * 86400,
             review: ReviewState::None,
             ci: CiProfile::Green,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "orbit",
@@ -196,6 +203,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 16 * 3600,
             review: ReviewState::Approved,
             ci: CiProfile::Green,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -206,6 +214,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 3 * 86400,
             review: ReviewState::None,
             ci: CiProfile::NoCi,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "acme-inc",
@@ -216,6 +225,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 11 * 3600,
             review: ReviewState::Requested,
             ci: CiProfile::RunningLong,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "windmill-labs",
@@ -226,6 +236,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 12 * 86400,
             review: ReviewState::None,
             ci: CiProfile::Green,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "orbit",
@@ -236,6 +247,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 50 * 60,
             review: ReviewState::None,
             ci: CiProfile::RedNew,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -246,6 +258,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 26 * 3600,
             review: ReviewState::Approved,
             ci: CiProfile::NoCi,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "honeycombio",
@@ -256,6 +269,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 9 * 3600,
             review: ReviewState::None,
             ci: CiProfile::Green,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "acme-inc",
@@ -266,6 +280,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 3 * 3600,
             review: ReviewState::Requested,
             ci: CiProfile::RedNew,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "windmill-labs",
@@ -276,6 +291,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 18 * 86400,
             review: ReviewState::None,
             ci: CiProfile::Green,
+            is_draft: false,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -286,6 +302,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             updated_age_secs: 90 * 60,
             review: ReviewState::None,
             ci: CiProfile::RunningLong,
+            is_draft: false,
         },
     ];
 
@@ -328,7 +345,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
                 ci_state,
                 ci_checks,
                 review_state: s.review.clone(),
-                is_draft: false,
+                is_draft: s.is_draft,
                 mergeable: Some("MERGEABLE".to_string()),
                 merge_state_status: Some("CLEAN".to_string()),
             }
