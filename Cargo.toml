@@ -2,6 +2,7 @@
 name = "needle-cli"
 version = "0.9.0"
 edition = "2024"
+autobins = false
 description = "TUI that highlights the GitHub PRs that need you"
 license = "MIT"
 readme = "README.md"
@@ -14,6 +15,10 @@ include = [
   "src/**",
   "public/**",
 ]
+
+[[bin]]
+name = "needle"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
