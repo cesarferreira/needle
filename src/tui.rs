@@ -358,13 +358,104 @@ fn build_list_lines(
         title_w = 8;
     }
 
+    fn render_row(
+        lines: &mut Vec<Line<'static>>,
+        visible_pr_indices: &mut Vec<usize>,
+        inner_height: u16,
+        selected_visible_idx: usize,
+        ui: UiPrefs,
+        repo_w: usize,
+        author_w: usize,
+        num_w: usize,
+        title_w: usize,
+        status_w: usize,
+        idx: usize,
+        pr: &UiPr,
+    ) {
+        if (lines.len() as u16) >= inner_height {
+            return;
+        }
+        let visible_idx = visible_pr_indices.len();
+        visible_pr_indices.push(idx);
+
+        let is_selected = visible_idx == selected_visible_idx;
+        let prefix = if is_selected { "> " } else { "  " };
+
+        let repo = if ui.hide_repo {
+            String::new()
+        } else {
+            pad_right(
+                &truncate_ellipsis(&format!("{}/{}", pr.pr.owner, pr.pr.repo), repo_w),
+                repo_w,
+            )
+        };
+
+        let author = if ui.hide_author {
+            String::new()
+        } else {
+            pad_right(&truncate_ellipsis(&pr.pr.author, author_w), author_w)
+        };
+
+        let num = if ui.hide_pr_numbers {
+            String::new()
+        } else {
+            pad_right(&truncate_ellipsis(&format!("#{}", pr.pr.number), num_w), num_w)
+        };
+
+        let title = pad_right(&truncate_ellipsis(&pr.pr.title, title_w), title_w);
+        let status = pad_right(&truncate_ellipsis(&pr.display_status, status_w), status_w);
+
+        let base = if is_selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else if pr.pr.is_draft {
+            Style::default().add_modifier(Modifier::DIM)
+        } else {
+            Style::default()
+        };
+
+        let status_color = match pr.pr.ci_state {
+            crate::model::CiState::Success => Color::Green,
+            crate::model::CiState::Failure => Color::Red,
+            crate::model::CiState::Running => Color::Yellow,
+            crate::model::CiState::None => Color::Gray,
+        };
+
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.push(Span::styled(prefix.to_string(), base.fg(Color::White)));
+        if !ui.hide_repo {
+            spans.push(Span::styled(repo, base.fg(Color::Cyan)));
+            spans.push(Span::raw("  "));
+        }
+        if !ui.hide_author {
+            spans.push(Span::styled(author, base.fg(Color::Magenta)));
+            spans.push(Span::raw("  "));
+        }
+        if !ui.hide_pr_numbers {
+            spans.push(Span::styled(num, base.fg(Color::Blue).add_modifier(Modifier::BOLD)));
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(title, base.fg(Color::White)));
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            status,
+            base.fg(status_color).add_modifier(Modifier::BOLD),
+        ));
+        push_line(lines, inner_height, Line::from(spans));
+    }
+
+    // DRAFT section is rendered at the bottom (but drafts are excluded from other sections).
+    let has_drafts = filtered
+        .iter()
+        .filter_map(|&i| prs.get(i))
+        .any(|p| p.pr.is_draft);
+
     let cats = [Category::NeedsYou, Category::Waiting, Category::Stale];
     for cat in cats {
         // Skip empty sections entirely.
         if !filtered
             .iter()
             .filter_map(|&i| prs.get(i))
-            .any(|p| p.category == cat)
+            .any(|p| !p.pr.is_draft && p.category == cat)
         {
             continue;
         }
@@ -413,77 +504,27 @@ fn build_list_lines(
         // Rows in this category
         for &idx in filtered {
             let Some(pr) = prs.get(idx) else { continue };
+            if pr.pr.is_draft {
+                continue;
+            }
             if pr.category != cat { continue; }
             if (lines.len() as u16) >= inner_height {
                 break;
             }
-            let visible_idx = visible_pr_indices.len();
-            visible_pr_indices.push(idx);
-
-            let is_selected = visible_idx == selected_visible_idx;
-            let prefix = if is_selected { "> " } else { "  " };
-            let repo = if ui.hide_repo {
-                String::new()
-            } else {
-                pad_right(
-                    &truncate_ellipsis(&format!("{}/{}", pr.pr.owner, pr.pr.repo), repo_w),
-                    repo_w,
-                )
-            };
-
-            let author = if ui.hide_author {
-                String::new()
-            } else {
-                pad_right(&truncate_ellipsis(&pr.pr.author, author_w), author_w)
-            };
-
-            let num = if ui.hide_pr_numbers {
-                String::new()
-            } else {
-                pad_right(&truncate_ellipsis(&format!("#{}", pr.pr.number), num_w), num_w)
-            };
-
-            let title = truncate_ellipsis(&pr.pr.title, title_w);
-            let title = pad_right(&title, title_w);
-
-            let status = truncate_ellipsis(&pr.display_status, status_w);
-            let status = pad_right(&status, status_w);
-
-            let base = if is_selected {
-                // Highlight the whole row.
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else if pr.pr.is_draft {
-                Style::default().add_modifier(Modifier::DIM)
-            } else {
-                Style::default()
-            };
-
-            let status_color = match pr.pr.ci_state {
-                crate::model::CiState::Success => Color::Green,
-                crate::model::CiState::Failure => Color::Red,
-                crate::model::CiState::Running => Color::Yellow,
-                crate::model::CiState::None => Color::Gray,
-            };
-
-            let mut spans: Vec<Span<'static>> = Vec::new();
-            spans.push(Span::styled(prefix.to_string(), base.fg(Color::White)));
-            if !ui.hide_repo {
-                spans.push(Span::styled(repo, base.fg(Color::Cyan)));
-                spans.push(Span::raw("  "));
-            }
-            if !ui.hide_author {
-                spans.push(Span::styled(author, base.fg(Color::Magenta)));
-                spans.push(Span::raw("  "));
-            }
-            if !ui.hide_pr_numbers {
-                spans.push(Span::styled(num, base.fg(Color::Blue).add_modifier(Modifier::BOLD)));
-                spans.push(Span::raw("  "));
-            }
-            spans.push(Span::styled(title, base.fg(Color::White)));
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled(status, base.fg(status_color).add_modifier(Modifier::BOLD)));
-            let line = Line::from(spans);
-            push_line(&mut lines, inner_height, line);
+            render_row(
+                &mut lines,
+                &mut visible_pr_indices,
+                inner_height,
+                selected_visible_idx,
+                ui,
+                repo_w,
+                author_w,
+                num_w,
+                title_w,
+                status_w,
+                idx,
+                pr,
+            );
         }
 
         // Blank line after section, but only if we actually rendered something in the section
@@ -494,6 +535,80 @@ fn build_list_lines(
 
         if (lines.len() as u16) >= inner_height {
             break;
+        }
+    }
+
+    // DRAFT section (shown separately so drafts don't appear as "waiting on others").
+    if has_drafts && (lines.len() as u16) < inner_height {
+        let start_len = lines.len();
+
+        push_line(
+            &mut lines,
+            inner_height,
+            Line::from(Span::styled(
+                "📝 DRAFT".to_string(),
+                Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD),
+            )),
+        );
+        push_line(
+            &mut lines,
+            inner_height,
+            Line::from(Span::raw(std::iter::repeat('─').take(iw).collect::<String>())),
+        );
+        push_line(
+            &mut lines,
+            inner_height,
+            Line::from(Span::styled(
+                {
+                    let mut s = String::new();
+                    s.push_str("  ");
+                    if !ui.hide_repo {
+                        s.push_str(&pad_right("REPO", repo_w));
+                        s.push_str("  ");
+                    }
+                    if !ui.hide_author {
+                        s.push_str(&pad_right("AUTHOR", author_w));
+                        s.push_str("  ");
+                    }
+                    if !ui.hide_pr_numbers {
+                        s.push_str(&pad_right("PR", num_w));
+                        s.push_str("  ");
+                    }
+                    s.push_str(&pad_right("TITLE", title_w));
+                    s.push_str("  ");
+                    s.push_str(&pad_right("STATUS", status_w));
+                    s
+                },
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            )),
+        );
+
+        for &idx in filtered {
+            let Some(pr) = prs.get(idx) else { continue };
+            if !pr.pr.is_draft {
+                continue;
+            }
+            render_row(
+                &mut lines,
+                &mut visible_pr_indices,
+                inner_height,
+                selected_visible_idx,
+                ui,
+                repo_w,
+                author_w,
+                num_w,
+                title_w,
+                status_w,
+                idx,
+                pr,
+            );
+            if (lines.len() as u16) >= inner_height {
+                break;
+            }
+        }
+
+        if lines.len() != start_len && (lines.len() as u16) < inner_height {
+            push_line(&mut lines, inner_height, Line::from(Span::raw("")));
         }
     }
 
@@ -550,7 +665,7 @@ fn build_footer(
             if filter_mode {
                 segs.extend([
                     keycap("Esc"), label("back"), sep(),
-                    keycap("Enter"), label("done"), sep(),
+                    keycap("Enter"), label("open"), sep(),
                     keycap("Backspace"), label("delete"), sep(),
                     keycap("Ctrl+n"), label("needs"), sep(),
                     keycap("Ctrl+c"), label("failing"), sep(),
@@ -833,67 +948,56 @@ fn help_lines() -> Vec<Line<'static>> {
     let mins = |s: i64| s / 60;
     let hours = |s: i64| s / 3600;
     vec![
-        Line::from(Span::styled(
-            "needle help",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            "─".repeat(60),
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(""),
         Line::from(vec![
-            Span::styled("🔥 NEEDS YOU", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": score >= 40 (urgent)."),
+            Span::styled("needle", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("  help", Style::default().fg(Color::Gray)),
         ]),
-        Line::from(vec![
-            Span::styled("✅ NO ACTION NEEDED", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": score 0..39 (informational / in-progress / neutral)."),
-        ]),
-        Line::from(vec![
-            Span::styled("⏳ WAITING ON OTHERS", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(": score < 0 (currently: CI green + no review requested)."),
-        ]),
+        Line::from(Span::styled("─".repeat(60), Style::default().fg(Color::Gray))),
         Line::from(""),
         Line::from(Span::styled(
-            "Scoring (higher = more urgent)",
+            "Sections",
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         )),
-        Line::from(format!("  +{SCORE_REVIEW_REQUESTED}  review requested from you")),
         Line::from(format!(
-            "  +{SCORE_CI_FAILED_NEW}  CI failed (new) (state changed since last_seen or new commit)"
+            "  🔥 NEEDS YOU: score >= {CATEGORY_NEEDS_YOU_MIN}"
         )),
+        Line::from("  ✅ NO ACTION NEEDED: score 0..39"),
         Line::from(format!(
-            "  +{SCORE_CI_RUNNING_LONG}  CI running longer than {} minutes",
+            "  ⏳ WAITING ON OTHERS: score < {CATEGORY_NO_ACTION_MIN} (currently: green + no review)"
+        )),
+        Line::from("  📝 DRAFT: drafts are dimmed and shown in their own section (regardless of score)"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Scoring",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(format!("  +{SCORE_REVIEW_REQUESTED:<2}  review requested from you")),
+        Line::from(format!("  +{SCORE_CI_FAILED_NEW:<2}  CI failed (new)")),
+        Line::from("       (state changed since last_seen or new commit)"),
+        Line::from(format!(
+            "  +{SCORE_CI_RUNNING_LONG:<2}  CI running longer than {}m",
             mins(CI_RUNNING_LONG_SECS)
         )),
         Line::from(format!(
-            "  +{SCORE_APPROVED_UNMERGED_OLD}  approved but unmerged for >{}h",
+            "  +{SCORE_APPROVED_UNMERGED_OLD:<2}  approved but unmerged for >{}h",
             hours(APPROVED_UNMERGED_OLD_SECS)
         )),
         Line::from(format!(
-            "  {SCORE_WAITING_ON_OTHERS_GREEN}  waiting on others (no review requested, CI green, not approved)"
+            "  {SCORE_WAITING_ON_OTHERS_GREEN:<3} waiting on others (green + no review, not approved)"
         )),
         Line::from(format!(
-            "  {SCORE_CI_FAILED_UNCHANGED}  CI failed but unchanged since last_seen"
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!(
-                "Categories are score buckets: NEEDS YOU >= {CATEGORY_NEEDS_YOU_MIN}, NO ACTION NEEDED {CATEGORY_NO_ACTION_MIN}..{}, WAITING ON OTHERS < {CATEGORY_NO_ACTION_MIN}",
-                CATEGORY_NEEDS_YOU_MIN - 1
-            ),
-            Style::default().fg(Color::Gray),
+            "  {SCORE_CI_FAILED_UNCHANGED:<3} CI failed (unchanged)"
         )),
         Line::from(""),
         Line::from(Span::styled(
             "Keys",
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         )),
-        Line::from("  List:  ↑/↓ move, Enter open PR, Tab details, r refresh, / filter, ? help, q quit"),
-        Line::from("  Filter: type to filter, ↑/↓ move, Esc clear+exit, Enter keep+exit"),
-        Line::from("          Ctrl+n needs, Ctrl+c failing, Ctrl+v review, Ctrl+x clear all"),
-        Line::from("  Details: ↑/↓ select check, Enter open, f open first failing, Tab back"),
+        Line::from("  List    : ↑/↓ move  Enter open  Tab details  r refresh  / filter  ? help  q quit"),
+        Line::from("            Esc clears active filter (when not typing)"),
+        Line::from("  Filter  : type to filter  ↑/↓ move  Enter open  Esc clear+exit"),
+        Line::from("            Ctrl+n needs  Ctrl+c failing  Ctrl+v review  Ctrl+x clear"),
+        Line::from("  Details : ↑/↓ select  Enter open check  f open failing  Tab back"),
         Line::from(""),
         Line::from(Span::styled("Press ? or Esc to close.", Style::default().fg(Color::Gray))),
     ]
@@ -1151,10 +1255,16 @@ pub fn run_tui(
                             state.filter_query = state.filter_edit.clone();
                         }
                         (KeyCode::Enter, _) => {
-                            // Live filtering already applied; Enter just exits filter mode.
+                            // Live filtering already applied; Enter opens the selected PR (same as list mode).
+                            if state.mode == ViewMode::List {
+                                if let Some(pr_idx) = visible_for_events.get(state.selected_idx).copied() {
+                                    if let Some(pr) = state.prs.get_mut(pr_idx) {
+                                        open_in_browser(&pr.pr.url);
+                                    }
+                                }
+                            }
                             state.filter_editing = false;
                             state.filter_edit.clear();
-                            state.selected_idx = 0;
                         }
                         (KeyCode::Char('x'), m) if m.contains(KeyModifiers::CONTROL) => {
                             state.filter_prev_query.clear();
@@ -1191,6 +1301,22 @@ pub fn run_tui(
                 match k.code {
                     KeyCode::Char('?') => {
                         state.help_open = !state.help_open;
+                    }
+                    KeyCode::Esc => {
+                        // In list mode, Esc clears any active filter/toggles even when not currently typing.
+                        if state.mode == ViewMode::List {
+                            if !state.filter_query.is_empty()
+                                || state.only_needs_you
+                                || state.only_failing_ci
+                                || state.only_review_requested
+                            {
+                                state.filter_query.clear();
+                                state.only_needs_you = false;
+                                state.only_failing_ci = false;
+                                state.only_review_requested = false;
+                                state.selected_idx = 0;
+                            }
+                        }
                     }
                     KeyCode::Char('q') => break,
                     KeyCode::Char('r') => {

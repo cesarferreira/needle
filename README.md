@@ -133,10 +133,11 @@ In details view you get a list of CI steps (check runs / status contexts):
 
 - Single-screen list, visually grouped by derived category:
   - **NEEDS YOU** (score >= 40)
-  - **WAITING** (0..39)
-  - **STALE** (< 0)
+  - **DRAFT** (draft PRs; shown separately and dimmed)
+  - **NO ACTION NEEDED** (0..39)
+  - **WAITING ON OTHERS** (< 0)
 - Empty sections are hidden.
-- Rows are dimmed if `last_opened_at` is recent.
+- Draft rows are dimmed.
 - No scrolling beyond terminal height (truncates to fit).
 - Uses cached SQLite data to render immediately, then refreshes in the background.
 
