@@ -6,7 +6,7 @@ mod refresh;
 mod timeutil;
 mod tui;
 
-use crate::db::{db_path, open_db};
+use crate::db::{db_path, delete_prs_not_in, open_db};
 use crate::refresh::{ScopeFilters, load_cached, refresh, refresh_demo};
 use crate::tui::{AppState, UiPrefs, run_tui};
 use clap::{ArgAction, Parser};
@@ -24,6 +24,14 @@ struct CliArgs {
     /// Print version information (-v, -V, --version).
     #[arg(short = 'v', long = "version", action = ArgAction::Version)]
     version: (),
+
+    /// Skip loading cached PRs on startup (start empty, rely on refresh).
+    #[arg(long = "no-cache")]
+    no_cache: bool,
+
+    /// Delete the cache database before starting (also applies to --demo path).
+    #[arg(long = "purge-cache")]
+    purge_cache: bool,
 
     /// Only include PRs updated in the last N days.
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(i64).range(0..))]
@@ -83,10 +91,17 @@ async fn main() {
 
     if args.demo {
         let demo_path = std::path::PathBuf::from("target/needle-demo/prs.sqlite");
+        if args.purge_cache {
+            let _ = std::fs::remove_file(&demo_path);
+        }
         let conn = open_db(&demo_path).unwrap_or_else(|e| {
             eprintln!("{e}");
             std::process::exit(1);
         });
+
+        if args.no_cache {
+            let _ = delete_prs_not_in(&conn, &[]);
+        }
 
         // Seed once, then run again so some CI failures look "unchanged" on first render.
         let _ = refresh_demo(&conn, days, &scope);
@@ -126,13 +141,24 @@ async fn main() {
         eprintln!("{e}");
         std::process::exit(1);
     });
+    if args.purge_cache {
+        let _ = std::fs::remove_file(&path);
+    }
     let conn = open_db(&path).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1);
     });
 
+    if args.no_cache {
+        let _ = delete_prs_not_in(&conn, &[]);
+    }
+
     // Fast startup: render cached SQLite snapshot immediately, then refresh in background.
-    let cached = load_cached(&conn, days, &scope).unwrap_or_else(|_e| Vec::new());
+    let cached = if args.no_cache {
+        Vec::new()
+    } else {
+        load_cached(&conn, days, &scope).unwrap_or_else(|_e| Vec::new())
+    };
     let state = AppState::new(cached, ui);
 
     let handle = tokio::runtime::Handle::current();

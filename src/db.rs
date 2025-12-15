@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// Increment when cached schema/logic changes require an invalidate-and-reseed.
+pub const CACHE_VERSION: i32 = 1;
+
 #[derive(Debug, Clone)]
 pub struct DbPrRow {
     pub pr_key: String,
@@ -46,6 +49,7 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("Failed to open sqlite db: {e}"))?;
     init_schema(&conn)?;
     migrate_schema(&conn)?;
+    ensure_cache_version(&conn)?;
     Ok(conn)
 }
 
@@ -115,6 +119,22 @@ fn migrate_schema(conn: &Connection) -> Result<(), String> {
     add_if_missing(conn, &existing, "merge_state_status", "TEXT")?;
     add_if_missing(conn, &existing, "author_is_viewer", "INTEGER")?;
 
+    Ok(())
+}
+
+fn ensure_cache_version(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("PRAGMA user_version")
+        .map_err(|e| format!("Failed to read cache version: {e}"))?;
+    let current: i64 = stmt
+        .query_row([], |row| row.get(0))
+        .map_err(|e| format!("Failed to fetch cache version: {e}"))?;
+    if current as i32 != CACHE_VERSION {
+        conn.execute("DELETE FROM prs", [])
+            .map_err(|e| format!("Failed to clear cache for version bump: {e}"))?;
+        conn.execute(&format!("PRAGMA user_version = {CACHE_VERSION}"), [])
+            .map_err(|e| format!("Failed to set cache version: {e}"))?;
+    }
     Ok(())
 }
 

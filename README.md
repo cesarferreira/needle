@@ -52,6 +52,8 @@ needle
 - `--hide-pr-numbers`: hide PR numbers column
 - `--hide-repo`: hide repository column
 - `--hide-author`: hide author column
+- `--no-cache`: start empty (skip cached PRs) and rely on fresh refresh
+- `--purge-cache`: delete the cache DB before starting (also works with `--demo`)
 
 ```bash
 needle --days 7
