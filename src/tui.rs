@@ -489,8 +489,8 @@ fn build_list_lines(
         .any(|p| p.pr.is_draft);
 
     let cats = [
-        Category::NeedsYou,
         Category::ReadyToMerge,
+        Category::NeedsYou,
         Category::Waiting,
         Category::Stale,
     ];
