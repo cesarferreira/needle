@@ -28,6 +28,7 @@ struct DemoPrSpec {
     review: ReviewState,
     ci: CiProfile,
     is_draft: bool,
+    is_viewer_author: bool,
 }
 
 fn fnv1a_64(s: &str) -> u64 {
@@ -60,7 +61,14 @@ fn pr_url(owner: &str, repo: &str, number: i64) -> String {
     format!("https://github.com/{owner}/{repo}/pull/{number}")
 }
 
-fn checks_for(profile: CiProfile, owner: &str, repo: &str, _number: i64, now: i64, salt: u64) -> (CiState, Vec<CiCheck>) {
+fn checks_for(
+    profile: CiProfile,
+    owner: &str,
+    repo: &str,
+    _number: i64,
+    now: i64,
+    salt: u64,
+) -> (CiState, Vec<CiCheck>) {
     let base_run = 8_100_000u64 + (salt % 900_000);
     let url = |off: u64| Some(actions_url(owner, repo, base_run + off));
 
@@ -101,13 +109,23 @@ fn checks_for(profile: CiProfile, owner: &str, repo: &str, _number: i64, now: i6
                     22,
                 ),
                 mk("lint", CiCheckState::Success, None, 33),
-                mk("deploy / preview", CiCheckState::Running, Some(now.saturating_sub(41 * 60)), 44),
+                mk(
+                    "deploy / preview",
+                    CiCheckState::Running,
+                    Some(now.saturating_sub(41 * 60)),
+                    44,
+                ),
             ],
         ),
         CiProfile::RunningShort => (
             CiState::Running,
             vec![
-                mk("build / linux", CiCheckState::Running, Some(now.saturating_sub(4 * 60)), 11),
+                mk(
+                    "build / linux",
+                    CiCheckState::Running,
+                    Some(now.saturating_sub(4 * 60)),
+                    11,
+                ),
                 mk("test / unit", CiCheckState::None, None, 22),
                 mk("lint", CiCheckState::None, None, 33),
             ],
@@ -128,6 +146,19 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::Requested,
             ci: CiProfile::Green,
             is_draft: false,
+            is_viewer_author: false,
+        },
+        DemoPrSpec {
+            owner: "you-inc",
+            repo: "product",
+            number: 12,
+            author: "you",
+            title: "Ready: merge cleanup for onboarding flow",
+            updated_age_secs: 45 * 60,
+            review: ReviewState::Approved,
+            ci: CiProfile::Green,
+            is_draft: false,
+            is_viewer_author: true,
         },
         DemoPrSpec {
             owner: "orbit",
@@ -139,6 +170,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::RedNew,
             is_draft: true,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "windmill-labs",
@@ -150,6 +182,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::RedStuck,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -161,6 +194,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::RunningLong,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "acme-inc",
@@ -172,6 +206,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::RunningShort,
             is_draft: true,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "honeycombio",
@@ -183,6 +218,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::Green,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "orbit",
@@ -194,6 +230,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::Approved,
             ci: CiProfile::Green,
             is_draft: false,
+            is_viewer_author: true,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -205,6 +242,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::NoCi,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "acme-inc",
@@ -216,6 +254,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::Requested,
             ci: CiProfile::RunningLong,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "windmill-labs",
@@ -227,6 +266,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::Green,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "orbit",
@@ -238,6 +278,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::RedNew,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -249,6 +290,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::Approved,
             ci: CiProfile::NoCi,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "honeycombio",
@@ -260,6 +302,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::Green,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "acme-inc",
@@ -271,6 +314,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::Requested,
             ci: CiProfile::RedNew,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "windmill-labs",
@@ -282,6 +326,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::Green,
             is_draft: false,
+            is_viewer_author: false,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -293,6 +338,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             review: ReviewState::None,
             ci: CiProfile::RunningLong,
             is_draft: false,
+            is_viewer_author: false,
         },
     ];
 
@@ -306,7 +352,10 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             let (ci_state, ci_checks) = checks_for(s.ci, s.owner, s.repo, s.number, now, salt);
 
             // Keep some PRs "stuck" so the second startup pass has a stable failure.
-            let stable = matches!(s.ci, CiProfile::RedStuck | CiProfile::NoCi | CiProfile::Green);
+            let stable = matches!(
+                s.ci,
+                CiProfile::RedStuck | CiProfile::NoCi | CiProfile::Green
+            );
             let sha_salt = if stable {
                 fnv1a_64(&key)
             } else {
@@ -315,7 +364,10 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             let sha = short_sha(sha_salt);
 
             // Make a few PRs feel alive across refreshes by shifting updatedAt slightly.
-            let wobble = if matches!(s.ci, CiProfile::RunningLong | CiProfile::RunningShort | CiProfile::RedNew) {
+            let wobble = if matches!(
+                s.ci,
+                CiProfile::RunningLong | CiProfile::RunningShort | CiProfile::RedNew
+            ) {
                 ((tick as i64) % 7) * 60
             } else {
                 0
@@ -338,6 +390,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
                 is_draft: s.is_draft,
                 mergeable: Some("MERGEABLE".to_string()),
                 merge_state_status: Some("CLEAN".to_string()),
+                is_viewer_author: s.is_viewer_author,
             }
         })
         .collect()

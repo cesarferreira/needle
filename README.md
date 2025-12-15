@@ -133,6 +133,7 @@ In details view you get a list of CI steps (check runs / status contexts):
 
 - Single-screen list, visually grouped by derived category:
   - **NEEDS YOU** (score >= 40)
+  - **READY TO MERGE** (your PR, CI green, no blockers)
   - **DRAFT** (draft PRs; shown separately and dimmed)
   - **NO ACTION NEEDED** (0..39)
   - **WAITING ON OTHERS** (< 0)

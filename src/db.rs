@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,6 +21,7 @@ pub struct DbPrRow {
     pub is_draft: Option<i64>,
     pub mergeable: Option<String>,
     pub merge_state_status: Option<String>,
+    pub author_is_viewer: Option<i64>,
 
     pub last_seen_at: Option<i64>,
     pub last_opened_at: Option<i64>,
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS prs (
   is_draft INTEGER,                -- 0/1
   mergeable TEXT,                  -- GitHub enum as string
   merge_state_status TEXT,         -- GitHub enum as string
+  author_is_viewer INTEGER,        -- 0/1
 
   last_seen_at INTEGER,            -- unix timestamp
   last_opened_at INTEGER           -- unix timestamp
@@ -111,6 +113,7 @@ fn migrate_schema(conn: &Connection) -> Result<(), String> {
     add_if_missing(conn, &existing, "is_draft", "INTEGER")?;
     add_if_missing(conn, &existing, "mergeable", "TEXT")?;
     add_if_missing(conn, &existing, "merge_state_status", "TEXT")?;
+    add_if_missing(conn, &existing, "author_is_viewer", "INTEGER")?;
 
     Ok(())
 }
@@ -122,7 +125,7 @@ pub fn load_all_prs(conn: &Connection) -> Result<HashMap<String, DbPrRow>, Strin
 SELECT
   pr_key, owner, repo, number, title, url, author, updated_at_unix,
   last_commit_sha, last_ci_state, last_review_state,
-  ci_checks_json, is_draft, mergeable, merge_state_status,
+  ci_checks_json, is_draft, mergeable, merge_state_status, author_is_viewer,
   last_seen_at, last_opened_at
 FROM prs
 "#,
@@ -154,8 +157,9 @@ FROM prs
             is_draft: row.get(12).map_err(|e| format!("Row decode: {e}"))?,
             mergeable: row.get(13).map_err(|e| format!("Row decode: {e}"))?,
             merge_state_status: row.get(14).map_err(|e| format!("Row decode: {e}"))?,
-            last_seen_at: row.get(15).map_err(|e| format!("Row decode: {e}"))?,
-            last_opened_at: row.get(16).map_err(|e| format!("Row decode: {e}"))?,
+            author_is_viewer: row.get(15).map_err(|e| format!("Row decode: {e}"))?,
+            last_seen_at: row.get(16).map_err(|e| format!("Row decode: {e}"))?,
+            last_opened_at: row.get(17).map_err(|e| format!("Row decode: {e}"))?,
         };
         out.insert(pr.pr_key.clone(), pr);
     }
@@ -169,12 +173,12 @@ INSERT INTO prs (
   pr_key, owner, repo, number, title, url, author, updated_at_unix,
   last_commit_sha, last_ci_state, last_review_state,
   ci_checks_json, is_draft, mergeable, merge_state_status,
-  last_seen_at, last_opened_at
+  author_is_viewer, last_seen_at, last_opened_at
 ) VALUES (
   ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
   ?9, ?10, ?11,
   ?12, ?13, ?14, ?15,
-  ?16, ?17
+  ?16, ?17, ?18
 )
 ON CONFLICT(pr_key) DO UPDATE SET
   owner = excluded.owner,
@@ -191,6 +195,7 @@ ON CONFLICT(pr_key) DO UPDATE SET
   is_draft = excluded.is_draft,
   mergeable = excluded.mergeable,
   merge_state_status = excluded.merge_state_status,
+  author_is_viewer = excluded.author_is_viewer,
   last_seen_at = excluded.last_seen_at
 "#,
         params![
@@ -209,6 +214,7 @@ ON CONFLICT(pr_key) DO UPDATE SET
             pr.is_draft,
             pr.mergeable,
             pr.merge_state_status,
+            pr.author_is_viewer,
             last_seen_at,
             pr.last_opened_at
         ],
@@ -238,5 +244,3 @@ pub fn delete_prs_not_in(conn: &Connection, keep_pr_keys: &[String]) -> Result<(
         .map_err(|e| format!("Failed to delete old prs: {e}"))?;
     Ok(())
 }
-
-

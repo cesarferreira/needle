@@ -85,6 +85,3 @@ fn days_from_civil(year: i32, month: i32, day: i32) -> Option<i64> {
     let days = (era as i64) * 146_097 + (doe as i64) - 719_468; // 719468 = days to 1970-01-01
     Some(days)
 }
-
-
-

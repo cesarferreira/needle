@@ -46,6 +46,7 @@ impl ScopeFilters {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     NeedsYou,
+    ReadyToMerge,
     Waiting,
     Stale,
 }
@@ -85,17 +86,18 @@ fn parse_ci_checks_json(s: Option<&str>) -> Vec<CiCheck> {
 }
 
 /// Load cached PRs from SQLite for a fast startup render (no network).
-pub fn load_cached(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) -> Result<Vec<UiPr>, String> {
+pub fn load_cached(
+    conn: &Connection,
+    cutoff_days: i64,
+    scope: &ScopeFilters,
+) -> Result<Vec<UiPr>, String> {
     let existing: HashMap<String, DbPrRow> = load_all_prs(conn)?;
     let now = now_unix();
     let cutoff_ts = now.saturating_sub(cutoff_days.saturating_mul(86_400));
 
     let mut out: Vec<UiPr> = Vec::new();
     for (_k, row) in existing {
-        let updated_at_unix = row
-            .updated_at_unix
-            .or(row.last_seen_at)
-            .unwrap_or(now);
+        let updated_at_unix = row.updated_at_unix.or(row.last_seen_at).unwrap_or(now);
         if updated_at_unix < cutoff_ts {
             continue;
         }
@@ -115,6 +117,7 @@ pub fn load_cached(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) ->
             is_draft: row.is_draft.unwrap_or(0) != 0,
             mergeable: row.mergeable.clone(),
             merge_state_status: row.merge_state_status.clone(),
+            is_viewer_author: db_int_to_bool(row.author_is_viewer),
         };
         if !scope.matches(&pr) {
             continue;
@@ -123,7 +126,7 @@ pub fn load_cached(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) ->
         let is_new_review = false;
         let is_new_ci_failure = false;
         let score = score_pr(&pr, None, now, is_new_ci_failure);
-        let category = category_for(score);
+        let category = category_for(&pr, score);
         let display_status = status_text(&pr, now, is_new_ci_failure, is_new_review);
 
         out.push(UiPr {
@@ -154,6 +157,14 @@ fn review_to_db(r: &ReviewState) -> &'static str {
 
 fn draft_to_db(v: bool) -> i64 {
     if v { 1 } else { 0 }
+}
+
+fn viewer_author_to_db(v: bool) -> i64 {
+    if v { 1 } else { 0 }
+}
+
+fn db_int_to_bool(v: Option<i64>) -> bool {
+    v.unwrap_or(0) != 0
 }
 
 fn ci_checks_to_db_json(checks: &[CiCheck]) -> Option<String> {
@@ -207,8 +218,37 @@ fn score_pr(pr: &Pr, old: Option<&DbPrRow>, now: i64, is_new_ci_failure: bool) -
     score
 }
 
-fn category_for(score: i32) -> Category {
-    if score >= CATEGORY_NEEDS_YOU_MIN {
+fn is_ready_to_merge(pr: &Pr) -> bool {
+    if !pr.is_viewer_author || pr.is_draft {
+        return false;
+    }
+    if !matches!(pr.ci_state, CiState::Success) {
+        return false;
+    }
+    if matches!(pr.review_state, ReviewState::Requested) {
+        return false;
+    }
+
+    let is_blocked = pr
+        .merge_state_status
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("BLOCKED"));
+    let is_conflicting = pr
+        .mergeable
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("CONFLICTING"));
+    if is_blocked || is_conflicting {
+        return false;
+    }
+
+    // Treat "approved" or "no outstanding review request / not blocked" as ready.
+    true
+}
+
+fn category_for(pr: &Pr, score: i32) -> Category {
+    if is_ready_to_merge(pr) {
+        Category::ReadyToMerge
+    } else if score >= CATEGORY_NEEDS_YOU_MIN {
         Category::NeedsYou
     } else if score >= CATEGORY_NO_ACTION_MIN {
         Category::Waiting
@@ -249,6 +289,10 @@ fn status_text(pr: &Pr, now: i64, is_new_ci_failure: bool, is_new_review_request
         return "👀 review requested".to_string();
     }
 
+    if is_ready_to_merge(pr) {
+        return format!("✅ ready to merge {}", human_age(now, pr.updated_at_unix));
+    }
+
     match pr.ci_state {
         CiState::Failure => {
             if is_new_ci_failure {
@@ -287,7 +331,13 @@ fn is_new_ci_failure(pr: &Pr, old: Option<&DbPrRow>) -> bool {
     old_ci != Some("failure") || commit_changed
 }
 
-pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64, scope: &ScopeFilters, include_team_requests: bool) -> Result<Vec<UiPr>, String> {
+pub async fn refresh(
+    conn: &Connection,
+    octo: &Octocrab,
+    cutoff_days: i64,
+    scope: &ScopeFilters,
+    include_team_requests: bool,
+) -> Result<Vec<UiPr>, String> {
     let existing: HashMap<String, DbPrRow> = load_all_prs(conn)?;
     let now = now_unix();
 
@@ -324,13 +374,14 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64, scope
             is_draft: Some(draft_to_db(pr.is_draft)),
             mergeable: pr.mergeable.clone(),
             merge_state_status: pr.merge_state_status.clone(),
+            author_is_viewer: Some(viewer_author_to_db(pr.is_viewer_author)),
             last_seen_at: Some(now),
             last_opened_at: old.and_then(|r| r.last_opened_at),
         };
         upsert_pr(conn, &db_row, now)?;
 
         let score = score_pr(&pr, old, now, new_ci_failure);
-        let category = category_for(score);
+        let category = category_for(&pr, score);
         let display_status = status_text(&pr, now, new_ci_failure, new_review);
 
         out.push(UiPr {
@@ -355,7 +406,11 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64, scope
     Ok(out)
 }
 
-pub fn refresh_demo(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) -> Result<Vec<UiPr>, String> {
+pub fn refresh_demo(
+    conn: &Connection,
+    cutoff_days: i64,
+    scope: &ScopeFilters,
+) -> Result<Vec<UiPr>, String> {
     let existing: HashMap<String, DbPrRow> = load_all_prs(conn)?;
     let now = now_unix();
     let cutoff_ts = now.saturating_sub(cutoff_days.saturating_mul(86_400));
@@ -392,13 +447,14 @@ pub fn refresh_demo(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) -
             is_draft: Some(draft_to_db(pr.is_draft)),
             mergeable: pr.mergeable.clone(),
             merge_state_status: pr.merge_state_status.clone(),
+            author_is_viewer: Some(viewer_author_to_db(pr.is_viewer_author)),
             last_seen_at: Some(now),
             last_opened_at: old.and_then(|r| r.last_opened_at),
         };
         upsert_pr(conn, &db_row, now)?;
 
         let score = score_pr(&pr, old, now, new_ci_failure);
-        let category = category_for(score);
+        let category = category_for(&pr, score);
         let display_status = status_text(&pr, now, new_ci_failure, new_review);
 
         out.push(UiPr {
@@ -425,8 +481,13 @@ pub fn refresh_demo(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) -
 mod tests {
     use super::*;
     use crate::model::{CiCheckState, ReviewState};
-
-    fn mk_pr(now: i64, ci_state: CiState, review_state: ReviewState, updated_age_secs: i64, checks: Vec<CiCheck>) -> Pr {
+    fn mk_pr(
+        now: i64,
+        ci_state: CiState,
+        review_state: ReviewState,
+        updated_age_secs: i64,
+        checks: Vec<CiCheck>,
+    ) -> Pr {
         Pr {
             pr_key: "acme/repo#1".to_string(),
             owner: "acme".to_string(),
@@ -443,6 +504,7 @@ mod tests {
             is_draft: false,
             mergeable: None,
             merge_state_status: None,
+            is_viewer_author: false,
         }
     }
 
@@ -482,7 +544,13 @@ mod tests {
     #[test]
     fn scoring_approved_but_unmerged_after_24h() {
         let now = 1_700_000_000i64;
-        let pr = mk_pr(now, CiState::Success, ReviewState::Approved, 25 * 3600, Vec::new());
+        let pr = mk_pr(
+            now,
+            CiState::Success,
+            ReviewState::Approved,
+            25 * 3600,
+            Vec::new(),
+        );
         let score = score_pr(&pr, None, now, false);
         assert!(score >= 15);
     }
@@ -517,11 +585,93 @@ mod tests {
             is_draft: None,
             mergeable: None,
             merge_state_status: None,
+            author_is_viewer: None,
             last_seen_at: Some(now - 10),
             last_opened_at: None,
         };
 
         assert!(is_new_ci_failure(&pr, Some(&old)));
     }
-}
 
+    #[test]
+    fn ready_to_merge_bucket_for_authored_green_and_approved() {
+        let now = 1_700_000_000i64;
+        let mut pr = mk_pr(
+            now,
+            CiState::Success,
+            ReviewState::Approved,
+            300,
+            Vec::new(),
+        );
+        pr.is_viewer_author = true;
+
+        let score = score_pr(&pr, None, now, false);
+        let category = category_for(&pr, score);
+
+        assert!(matches!(category, Category::ReadyToMerge));
+        assert!(status_text(&pr, now, false, false).starts_with("✅ ready to merge"));
+    }
+
+    #[test]
+    fn ready_to_merge_requires_viewer_authorship_and_green_ci() {
+        let now = 1_700_000_000i64;
+        let mut pr = mk_pr(
+            now,
+            CiState::Running,
+            ReviewState::Approved,
+            300,
+            Vec::new(),
+        );
+        pr.is_viewer_author = true;
+
+        let score = score_pr(&pr, None, now, false);
+        let category = category_for(&pr, score);
+
+        assert!(!matches!(category, Category::ReadyToMerge));
+    }
+
+    #[test]
+    fn ready_to_merge_excludes_requested_or_blocked() {
+        let now = 1_700_000_000i64;
+        let mut pr = mk_pr(
+            now,
+            CiState::Success,
+            ReviewState::Requested,
+            300,
+            Vec::new(),
+        );
+        pr.is_viewer_author = true;
+
+        let score = score_pr(&pr, None, now, false);
+        let category = category_for(&pr, score);
+        assert!(!matches!(category, Category::ReadyToMerge));
+
+        let mut pr2 = mk_pr(
+            now,
+            CiState::Success,
+            ReviewState::Approved,
+            300,
+            Vec::new(),
+        );
+        pr2.is_viewer_author = true;
+        pr2.merge_state_status = Some("BLOCKED".to_string());
+        let category2 = category_for(&pr2, score_pr(&pr2, None, now, false));
+        assert!(!matches!(category2, Category::ReadyToMerge));
+    }
+
+    #[test]
+    fn demo_contains_ready_to_merge_authored_item() {
+        let tmp_path = std::env::temp_dir().join("needle-demo-test.sqlite");
+        let _ = std::fs::remove_file(&tmp_path);
+        let conn = crate::db::open_db(&tmp_path).unwrap();
+        let scope = ScopeFilters::default();
+        let now_days = 30;
+        let prs = refresh_demo(&conn, now_days, &scope).unwrap();
+
+        assert!(
+            prs.iter()
+                .any(|p| matches!(p.category, Category::ReadyToMerge)),
+            "expected at least one ready-to-merge PR in demo data"
+        );
+    }
+}

@@ -326,13 +326,27 @@ query($page_size: Int!, $cursor: String, $search_query: String!) {
 "#;
 
 fn map_ci_checks(node: &PullRequestNode) -> Vec<CiCheck> {
-    let Some(commits) = &node.commits else { return Vec::new() };
-    let Some(nodes) = &commits.nodes else { return Vec::new() };
-    let Some(first) = nodes.first() else { return Vec::new() };
-    let Some(commit) = &first.commit else { return Vec::new() };
-    let Some(rollup) = &commit.status_check_rollup else { return Vec::new() };
-    let Some(ctxs) = &rollup.contexts else { return Vec::new() };
-    let Some(nodes) = &ctxs.nodes else { return Vec::new() };
+    let Some(commits) = &node.commits else {
+        return Vec::new();
+    };
+    let Some(nodes) = &commits.nodes else {
+        return Vec::new();
+    };
+    let Some(first) = nodes.first() else {
+        return Vec::new();
+    };
+    let Some(commit) = &first.commit else {
+        return Vec::new();
+    };
+    let Some(rollup) = &commit.status_check_rollup else {
+        return Vec::new();
+    };
+    let Some(ctxs) = &rollup.contexts else {
+        return Vec::new();
+    };
+    let Some(nodes) = &ctxs.nodes else {
+        return Vec::new();
+    };
 
     let mut out = Vec::new();
     for n in nodes {
@@ -341,8 +355,15 @@ fn map_ci_checks(node: &PullRequestNode) -> Vec<CiCheck> {
                 let name = n.name.clone().unwrap_or_else(|| "check".to_string());
                 let state = match n.conclusion.as_deref() {
                     Some("SUCCESS") => CiCheckState::Success,
-                    Some("FAILURE") | Some("ERROR") | Some("TIMED_OUT") | Some("STARTUP_FAILURE") => CiCheckState::Failure,
-                    Some("NEUTRAL") | Some("SKIPPED") | Some("STALE") | Some("CANCELLED") | Some("ACTION_REQUIRED") => CiCheckState::Neutral,
+                    Some("FAILURE")
+                    | Some("ERROR")
+                    | Some("TIMED_OUT")
+                    | Some("STARTUP_FAILURE") => CiCheckState::Failure,
+                    Some("NEUTRAL")
+                    | Some("SKIPPED")
+                    | Some("STALE")
+                    | Some("CANCELLED")
+                    | Some("ACTION_REQUIRED") => CiCheckState::Neutral,
                     None => CiCheckState::Running,
                     _ => CiCheckState::None,
                 };
@@ -396,13 +417,22 @@ fn map_ci_checks(node: &PullRequestNode) -> Vec<CiCheck> {
 fn derive_ci_state(rollup_state: Option<&str>, checks: &[CiCheck]) -> CiState {
     // Prefer the concrete list of checks (what we actually render) over the rollup state.
     // This avoids showing "CI failed" when a previous run was cancelled but new checks are now running.
-    if checks.iter().any(|c| matches!(c.state, CiCheckState::Failure)) {
+    if checks
+        .iter()
+        .any(|c| matches!(c.state, CiCheckState::Failure))
+    {
         return CiState::Failure;
     }
-    if checks.iter().any(|c| matches!(c.state, CiCheckState::Running)) {
+    if checks
+        .iter()
+        .any(|c| matches!(c.state, CiCheckState::Running))
+    {
         return CiState::Running;
     }
-    if checks.iter().any(|c| matches!(c.state, CiCheckState::Success)) {
+    if checks
+        .iter()
+        .any(|c| matches!(c.state, CiCheckState::Success))
+    {
         return CiState::Success;
     }
 
@@ -434,10 +464,14 @@ fn map_review_state(node: &PullRequestNode, is_requested: bool) -> ReviewState {
 }
 
 fn is_review_requested_by_user(node: &PullRequestNode, viewer_login: &str) -> bool {
-    let Some(rr) = &node.review_requests else { return false };
+    let Some(rr) = &node.review_requests else {
+        return false;
+    };
     let Some(nodes) = &rr.nodes else { return false };
     for n in nodes {
-        let Some(r) = &n.requested_reviewer else { continue };
+        let Some(r) = &n.requested_reviewer else {
+            continue;
+        };
         if r.typename.as_deref() == Some("User") && r.login.as_deref() == Some(viewer_login) {
             return true;
         }
@@ -445,7 +479,7 @@ fn is_review_requested_by_user(node: &PullRequestNode, viewer_login: &str) -> bo
     false
 }
 
-fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
+fn to_pr(node: PullRequestNode, is_requested: bool, viewer_login: &str) -> Option<Pr> {
     let ci_checks = map_ci_checks(&node);
     let ci_state = derive_ci_state(rollup_state(&node), &ci_checks);
     let last_commit_sha = node.head_ref_oid.clone();
@@ -459,6 +493,12 @@ fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
         .unwrap_or_else(|| "unknown".to_string());
     let updated_at_unix = parse_github_datetime_to_unix(&node.updated_at)?;
     let pr_key = format!("{owner}/{repo}#{}", node.number);
+
+    let is_viewer_author = node
+        .author
+        .as_ref()
+        .map(|a| a.login.as_str() == viewer_login)
+        .unwrap_or(false);
 
     Some(Pr {
         pr_key,
@@ -476,7 +516,17 @@ fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
         is_draft: node.is_draft.unwrap_or(false),
         mergeable: node.mergeable.clone(),
         merge_state_status: node.merge_state_status.clone(),
+        is_viewer_author,
     })
+}
+
+fn merge_into(map: &mut HashMap<String, Pr>, mut pr: Pr) {
+    if let Some(existing) = map.get(&pr.pr_key) {
+        if existing.is_viewer_author {
+            pr.is_viewer_author = true;
+        }
+    }
+    map.insert(pr.pr_key.clone(), pr);
 }
 
 #[cfg(test)]
@@ -494,14 +544,20 @@ mod tests {
 
     #[test]
     fn derive_ci_state_prefers_running_checks_over_failure_rollup() {
-        let checks = vec![mk_check(CiCheckState::Running), mk_check(CiCheckState::Success)];
+        let checks = vec![
+            mk_check(CiCheckState::Running),
+            mk_check(CiCheckState::Success),
+        ];
         let s = derive_ci_state(Some("FAILURE"), &checks);
         assert!(matches!(s, CiState::Running));
     }
 
     #[test]
     fn derive_ci_state_failure_if_any_failed_check() {
-        let checks = vec![mk_check(CiCheckState::Failure), mk_check(CiCheckState::Running)];
+        let checks = vec![
+            mk_check(CiCheckState::Failure),
+            mk_check(CiCheckState::Running),
+        ];
         let s = derive_ci_state(Some("PENDING"), &checks);
         assert!(matches!(s, CiState::Failure));
     }
@@ -512,9 +568,46 @@ mod tests {
         let s = derive_ci_state(Some("PENDING"), &checks);
         assert!(matches!(s, CiState::Running));
     }
+
+    #[test]
+    fn merge_preserves_viewer_authorship_when_requested_pr_overwrites() {
+        let mut map: HashMap<String, Pr> = HashMap::new();
+        let authored = Pr {
+            pr_key: "acme/repo#1".into(),
+            owner: "acme".into(),
+            repo: "repo".into(),
+            number: 1,
+            author: "me".into(),
+            title: "A".into(),
+            url: "url".into(),
+            updated_at_unix: 0,
+            last_commit_sha: None,
+            ci_state: CiState::Success,
+            ci_checks: Vec::new(),
+            review_state: ReviewState::None,
+            is_draft: false,
+            mergeable: None,
+            merge_state_status: None,
+            is_viewer_author: true,
+        };
+        let mut requested = authored.clone();
+        requested.is_viewer_author = false;
+        requested.review_state = ReviewState::Requested;
+
+        merge_into(&mut map, authored);
+        merge_into(&mut map, requested);
+
+        let pr = map.get("acme/repo#1").unwrap();
+        assert!(pr.is_viewer_author, "viewer author flag should persist");
+        assert!(matches!(pr.review_state, ReviewState::Requested));
+    }
 }
 
-pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64, include_team_requests: bool) -> Result<Vec<Pr>, String> {
+pub async fn fetch_attention_prs(
+    octo: &Octocrab,
+    cutoff_ts: i64,
+    include_team_requests: bool,
+) -> Result<Vec<Pr>, String> {
     // Fetch authored PRs
     let mut authored: Vec<PullRequestNode> = Vec::new();
     let mut cursor: Option<String> = None;
@@ -635,22 +728,18 @@ pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64, include_team_r
 
     for node in authored {
         let requested_user = is_review_requested_by_user(&node, &viewer_login);
-        if let Some(pr) = to_pr(node, requested_user) {
-            by_key.insert(pr.pr_key.clone(), pr);
+        if let Some(mut pr) = to_pr(node, requested_user, &viewer_login) {
+            // Authored query is always "my PRs", so force the flag on even if GitHub omitted author.
+            pr.is_viewer_author = true;
+            merge_into(&mut by_key, pr);
         }
     }
 
     for node in requested_nodes {
-        let key = format!(
-            "{}/{}#{}",
-            node.repository.owner.login, node.repository.name, node.number
-        );
-        if let Some(pr) = to_pr(node, true) {
-            by_key.insert(key, pr);
+        if let Some(pr) = to_pr(node, true, &viewer_login) {
+            merge_into(&mut by_key, pr);
         }
     }
 
     Ok(by_key.into_values().collect())
 }
-
-

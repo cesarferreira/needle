@@ -1,29 +1,32 @@
 use crate::db::now_unix;
 use crate::refresh::{
-    Category, UiPr, APPROVED_UNMERGED_OLD_SECS, CATEGORY_NEEDS_YOU_MIN, CATEGORY_NO_ACTION_MIN,
-    CI_RUNNING_LONG_SECS, SCORE_APPROVED_UNMERGED_OLD, SCORE_CI_FAILED_NEW, SCORE_CI_FAILED_UNCHANGED,
-    SCORE_CI_RUNNING_LONG, SCORE_REVIEW_REQUESTED, SCORE_WAITING_ON_OTHERS_GREEN,
+    APPROVED_UNMERGED_OLD_SECS, CATEGORY_NEEDS_YOU_MIN, CATEGORY_NO_ACTION_MIN,
+    CI_RUNNING_LONG_SECS, Category, SCORE_APPROVED_UNMERGED_OLD, SCORE_CI_FAILED_NEW,
+    SCORE_CI_FAILED_UNCHANGED, SCORE_CI_RUNNING_LONG, SCORE_REVIEW_REQUESTED,
+    SCORE_WAITING_ON_OTHERS_GREEN, UiPr,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::style::Print;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::tty::IsTty;
 use crossterm::execute;
+use crossterm::style::Print;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use crossterm::tty::IsTty;
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Alignment;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Terminal;
 use rusqlite::Connection;
+use std::collections::HashSet;
 use std::io::{self, Stdout};
 use std::process::Command;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use std::time::Instant;
-use std::collections::HashSet;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -97,6 +100,7 @@ impl AppState {
 fn category_title(cat: Category) -> &'static str {
     match cat {
         Category::NeedsYou => "🔥 NEEDS YOU",
+        Category::ReadyToMerge => "🚢 READY TO MERGE",
         Category::Waiting => "✅ NO ACTION NEEDED",
         Category::Stale => "⏳ WAITING ON OTHERS",
     }
@@ -104,9 +108,18 @@ fn category_title(cat: Category) -> &'static str {
 
 fn category_style(cat: Category) -> Style {
     match cat {
-        Category::NeedsYou => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        Category::Waiting => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        Category::Stale => Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        Category::NeedsYou => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        Category::ReadyToMerge => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        Category::Waiting => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        Category::Stale => Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
     }
 }
 
@@ -226,7 +239,13 @@ fn matches_filter(pr: &UiPr, query: &str) -> bool {
     repo.contains(&q) || author.contains(&q) || title.contains(&q) || num.contains(query.trim())
 }
 
-fn filtered_indices(state_prs: &[UiPr], query: &str, only_needs_you: bool, only_failing_ci: bool, only_review_requested: bool) -> Vec<usize> {
+fn filtered_indices(
+    state_prs: &[UiPr],
+    query: &str,
+    only_needs_you: bool,
+    only_failing_ci: bool,
+    only_review_requested: bool,
+) -> Vec<usize> {
     let mut out = Vec::new();
     for (idx, pr) in state_prs.iter().enumerate() {
         if only_needs_you && pr.category != Category::NeedsYou {
@@ -235,7 +254,9 @@ fn filtered_indices(state_prs: &[UiPr], query: &str, only_needs_you: bool, only_
         if only_failing_ci && !matches!(pr.pr.ci_state, crate::model::CiState::Failure) {
             continue;
         }
-        if only_review_requested && !matches!(pr.pr.review_state, crate::model::ReviewState::Requested) {
+        if only_review_requested
+            && !matches!(pr.pr.review_state, crate::model::ReviewState::Requested)
+        {
             continue;
         }
         if !matches_filter(pr, query) {
@@ -331,13 +352,25 @@ fn build_list_lines(
     // Reasonable upper bounds so title keeps most of the width,
     // but allow longer statuses like "CI running (123m)" without truncation.
     let status_w = max_status_len.clamp(12, 34);
-    let num_w = if ui.hide_pr_numbers { 0 } else { max_num_len.clamp(4, 8) };
-    let author_w = if ui.hide_author { 0 } else { max_author_len.clamp(6, 16) };
+    let num_w = if ui.hide_pr_numbers {
+        0
+    } else {
+        max_num_len.clamp(4, 8)
+    };
+    let author_w = if ui.hide_author {
+        0
+    } else {
+        max_author_len.clamp(6, 16)
+    };
 
     // Ensure title gets at least 16 chars; repo uses remaining but capped.
     let min_title_w = 16usize;
     let max_repo_w = 35usize;
-    let mut repo_w = if ui.hide_repo { 0 } else { max_repo_len.min(max_repo_w) };
+    let mut repo_w = if ui.hide_repo {
+        0
+    } else {
+        max_repo_len.min(max_repo_w)
+    };
 
     let repo_block = if ui.hide_repo { 0 } else { repo_w + sep_w };
     let author_block = if ui.hide_author { 0 } else { author_w + sep_w };
@@ -399,7 +432,10 @@ fn build_list_lines(
         let num = if ui.hide_pr_numbers {
             String::new()
         } else {
-            pad_right(&truncate_ellipsis(&format!("#{}", pr.pr.number), num_w), num_w)
+            pad_right(
+                &truncate_ellipsis(&format!("#{}", pr.pr.number), num_w),
+                num_w,
+            )
         };
 
         let title = pad_right(&truncate_ellipsis(&pr.pr.title, title_w), title_w);
@@ -431,7 +467,10 @@ fn build_list_lines(
             spans.push(Span::raw("  "));
         }
         if !ui.hide_pr_numbers {
-            spans.push(Span::styled(num, base.fg(Color::Blue).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                num,
+                base.fg(Color::Blue).add_modifier(Modifier::BOLD),
+            ));
             spans.push(Span::raw("  "));
         }
         spans.push(Span::styled(title, base.fg(Color::White)));
@@ -449,7 +488,12 @@ fn build_list_lines(
         .filter_map(|&i| prs.get(i))
         .any(|p| p.pr.is_draft);
 
-    let cats = [Category::NeedsYou, Category::Waiting, Category::Stale];
+    let cats = [
+        Category::NeedsYou,
+        Category::ReadyToMerge,
+        Category::Waiting,
+        Category::Stale,
+    ];
     for cat in cats {
         // Skip empty sections entirely.
         if !filtered
@@ -466,12 +510,17 @@ fn build_list_lines(
         push_line(
             &mut lines,
             inner_height,
-            Line::from(Span::styled(category_title(cat).to_string(), category_style(cat))),
+            Line::from(Span::styled(
+                category_title(cat).to_string(),
+                category_style(cat),
+            )),
         );
         push_line(
             &mut lines,
             inner_height,
-            Line::from(Span::raw(std::iter::repeat('─').take(iw).collect::<String>())),
+            Line::from(Span::raw(
+                std::iter::repeat('─').take(iw).collect::<String>(),
+            )),
         );
         push_line(
             &mut lines,
@@ -507,7 +556,9 @@ fn build_list_lines(
             if pr.pr.is_draft {
                 continue;
             }
-            if pr.category != cat { continue; }
+            if pr.category != cat {
+                continue;
+            }
             if (lines.len() as u16) >= inner_height {
                 break;
             }
@@ -547,13 +598,17 @@ fn build_list_lines(
             inner_height,
             Line::from(Span::styled(
                 "📝 DRAFT".to_string(),
-                Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::BOLD),
             )),
         );
         push_line(
             &mut lines,
             inner_height,
-            Line::from(Span::raw(std::iter::repeat('─').take(iw).collect::<String>())),
+            Line::from(Span::raw(
+                std::iter::repeat('─').take(iw).collect::<String>(),
+            )),
         );
         push_line(
             &mut lines,
@@ -664,55 +719,95 @@ fn build_footer(
         ViewMode::List => {
             if filter_mode {
                 segs.extend([
-                    keycap("Esc"), label("back"), sep(),
-                    keycap("Enter"), label("open"), sep(),
-                    keycap("Backspace"), label("delete"), sep(),
-                    keycap("Ctrl+n"), label("needs"), sep(),
-                    keycap("Ctrl+c"), label("failing"), sep(),
-                    keycap("Ctrl+v"), label("review"), sep(),
-                    keycap("Ctrl+x"), label("clear"),
-                    sep(), keycap("?"), label("help"),
+                    keycap("Esc"),
+                    label("back"),
+                    sep(),
+                    keycap("Enter"),
+                    label("open"),
+                    sep(),
+                    keycap("Backspace"),
+                    label("delete"),
+                    sep(),
+                    keycap("Ctrl+n"),
+                    label("needs"),
+                    sep(),
+                    keycap("Ctrl+c"),
+                    label("failing"),
+                    sep(),
+                    keycap("Ctrl+v"),
+                    label("review"),
+                    sep(),
+                    keycap("Ctrl+x"),
+                    label("clear"),
+                    sep(),
+                    keycap("?"),
+                    label("help"),
                 ]);
             } else {
                 segs.extend([
-                    keycap("q"), label("quit"), sep(),
+                    keycap("q"),
+                    label("quit"),
+                    sep(),
                     keycap("r"),
                     if refreshing {
                         Seg {
                             text: format!("refreshing {}", shimmer(shimmer_phase)),
-                            style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                            style: Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
                         }
                     } else {
                         label("refresh")
                     },
                     sep(),
-                    keycap("/"), label("filter"), sep(),
-                    keycap("?"), label("help"), sep(),
-                    keycap("Enter"), label("open"), sep(),
-                    keycap("Tab"), label("details"), sep(),
-                    keycap("↑/↓"), label("move"),
+                    keycap("/"),
+                    label("filter"),
+                    sep(),
+                    keycap("?"),
+                    label("help"),
+                    sep(),
+                    keycap("Enter"),
+                    label("open"),
+                    sep(),
+                    keycap("Tab"),
+                    label("details"),
+                    sep(),
+                    keycap("↑/↓"),
+                    label("move"),
                 ]);
             }
         }
         ViewMode::Details => {
             segs.extend([
-                keycap("Tab"), label("back"), sep(),
-                keycap("Enter"), label("open check"), sep(),
-                keycap("f"), label("open failing"), sep(),
+                keycap("Tab"),
+                label("back"),
+                sep(),
+                keycap("Enter"),
+                label("open check"),
+                sep(),
+                keycap("f"),
+                label("open failing"),
+                sep(),
                 keycap("r"),
                 if refreshing {
                     Seg {
                         text: format!("refreshing {}", shimmer(shimmer_phase)),
-                        style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        style: Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     }
                 } else {
                     label("refresh")
                 },
                 sep(),
-                keycap("?"), label("help"), sep(),
-                keycap("q"), label("quit"),
+                keycap("?"),
+                label("help"),
                 sep(),
-                keycap("↑/↓"), label("select"),
+                keycap("q"),
+                label("quit"),
+                sep(),
+                keycap("↑/↓"),
+                label("select"),
             ]);
         }
     }
@@ -728,50 +823,80 @@ fn build_footer(
     if total_w > iw {
         let mut essential: Vec<Seg> = match mode {
             ViewMode::List => vec![
-                keycap("q"), label("quit"), sep(),
+                keycap("q"),
+                label("quit"),
+                sep(),
                 keycap("r"),
                 if refreshing {
                     Seg {
                         text: format!("refreshing {}", shimmer(shimmer_phase)),
-                        style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        style: Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     }
                 } else {
                     label("refresh")
                 },
                 sep(),
-                keycap("/"), label("filter"),
+                keycap("/"),
+                label("filter"),
                 sep(),
-                keycap("?"), label("help"),
+                keycap("?"),
+                label("help"),
                 sep(),
-                keycap("Enter"), label("open"), sep(),
-                keycap("Tab"), label("details"), sep(),
-                keycap("↑/↓"), label("move"),
+                keycap("Enter"),
+                label("open"),
+                sep(),
+                keycap("Tab"),
+                label("details"),
+                sep(),
+                keycap("↑/↓"),
+                label("move"),
             ],
             ViewMode::Details => vec![
-                keycap("Tab"), label("back"), sep(),
-                keycap("Enter"), label("open"), sep(),
+                keycap("Tab"),
+                label("back"),
+                sep(),
+                keycap("Enter"),
+                label("open"),
+                sep(),
                 keycap("r"),
                 if refreshing {
                     Seg {
                         text: format!("refreshing {}", shimmer(shimmer_phase)),
-                        style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        style: Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     }
                 } else {
                     label("refresh")
                 },
                 sep(),
-                keycap("?"), label("help"), sep(),
-                keycap("q"), label("quit"),
+                keycap("?"),
+                label("help"),
+                sep(),
+                keycap("q"),
+                label("quit"),
             ],
         };
 
         // Add optional segments only if they fit.
         let mut optional: Vec<Seg> = match mode {
             ViewMode::List => Vec::new(),
-            ViewMode::Details => vec![sep(), keycap("f"), label("failing"), sep(), keycap("↑/↓"), label("select")],
+            ViewMode::Details => vec![
+                sep(),
+                keycap("f"),
+                label("failing"),
+                sep(),
+                keycap("↑/↓"),
+                label("select"),
+            ],
         };
 
-        let mut cur_w: usize = essential.iter().map(|s| UnicodeWidthStr::width(s.text.as_str())).sum();
+        let mut cur_w: usize = essential
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.text.as_str()))
+            .sum();
         while !optional.is_empty() {
             let next = optional.remove(0);
             let next_w = UnicodeWidthStr::width(next.text.as_str());
@@ -792,7 +917,12 @@ fn build_footer(
     Line::from(spans)
 }
 
-fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_selected: usize) -> Vec<Line<'static>> {
+fn build_details_lines(
+    pr: &UiPr,
+    inner_width: u16,
+    inner_height: u16,
+    ci_selected: usize,
+) -> Vec<Line<'static>> {
     let iw = inner_width as usize;
     let mut out: Vec<Line<'static>> = Vec::new();
     let now = now_unix();
@@ -800,7 +930,9 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
     // Title line
     out.push(Line::from(Span::styled(
         truncate_ellipsis("DETAILS", iw),
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     )));
     out.push(Line::from(Span::styled(
         std::iter::repeat('─').take(iw).collect::<String>(),
@@ -815,10 +947,35 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
         ("Status", pr.display_status.clone()),
         ("Updated", human_age(now, pr.pr.updated_at_unix)),
         ("URL", pr.pr.url.clone()),
-        ("Commit", pr.pr.last_commit_sha.clone().unwrap_or_else(|| "none".to_string())),
-        ("Draft", if pr.pr.is_draft { "yes".to_string() } else { "no".to_string() }),
-        ("Mergeable", pr.pr.mergeable.clone().unwrap_or_else(|| "unknown".to_string())),
-        ("MergeState", pr.pr.merge_state_status.clone().unwrap_or_else(|| "unknown".to_string())),
+        (
+            "Commit",
+            pr.pr
+                .last_commit_sha
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        ),
+        (
+            "Draft",
+            if pr.pr.is_draft {
+                "yes".to_string()
+            } else {
+                "no".to_string()
+            },
+        ),
+        (
+            "Mergeable",
+            pr.pr
+                .mergeable
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+        ),
+        (
+            "MergeState",
+            pr.pr
+                .merge_state_status
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+        ),
     ];
 
     for (k, v) in rows {
@@ -830,8 +987,16 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
         let key_w = UnicodeWidthStr::width(key.as_str());
         let val_w = iw.saturating_sub(key_w);
         out.push(Line::from(vec![
-            Span::styled(key, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(truncate_ellipsis(&val, val_w), Style::default().fg(Color::White)),
+            Span::styled(
+                key,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                truncate_ellipsis(&val, val_w),
+                Style::default().fg(Color::White),
+            ),
         ]));
     }
 
@@ -842,7 +1007,9 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
     if (out.len() as u16) < inner_height {
         out.push(Line::from(Span::styled(
             "CI CHECKS".to_string(),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )));
     }
     if (out.len() as u16) < inner_height {
@@ -921,7 +1088,10 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
             };
             out.push(Line::from(vec![
                 Span::styled(prefix.to_string(), base.fg(Color::White)),
-                Span::styled(format!("{icon} "), base.fg(col).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{icon} "),
+                    base.fg(col).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(name, base.fg(Color::White)),
             ]));
         }
@@ -949,29 +1119,44 @@ fn help_lines() -> Vec<Line<'static>> {
     let hours = |s: i64| s / 3600;
     vec![
         Line::from(vec![
-            Span::styled("needle", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "needle",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  help", Style::default().fg(Color::Gray)),
         ]),
-        Line::from(Span::styled("─".repeat(60), Style::default().fg(Color::Gray))),
+        Line::from(Span::styled(
+            "─".repeat(60),
+            Style::default().fg(Color::Gray),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "Sections",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
-        Line::from(format!(
-            "  🔥 NEEDS YOU: score >= {CATEGORY_NEEDS_YOU_MIN}"
-        )),
-        Line::from("  ✅ NO ACTION NEEDED: score 0..39"),
+        Line::from(format!("  🔥 NEEDS YOU: score >= {CATEGORY_NEEDS_YOU_MIN}")),
+        Line::from("  🚢 READY TO MERGE: your PR, CI green, no blockers"),
+        Line::from("  ✅ NO ACTION NEEDED: score 0..39 (not ready-to-merge)"),
         Line::from(format!(
             "  ⏳ WAITING ON OTHERS: score < {CATEGORY_NO_ACTION_MIN} (currently: green + no review)"
         )),
-        Line::from("  📝 DRAFT: drafts are dimmed and shown in their own section (regardless of score)"),
+        Line::from(
+            "  📝 DRAFT: drafts are dimmed and shown in their own section (regardless of score)",
+        ),
         Line::from(""),
         Line::from(Span::styled(
             "Scoring",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
-        Line::from(format!("  +{SCORE_REVIEW_REQUESTED:<2}  review requested from you")),
+        Line::from(format!(
+            "  +{SCORE_REVIEW_REQUESTED:<2}  review requested from you"
+        )),
         Line::from(format!("  +{SCORE_CI_FAILED_NEW:<2}  CI failed (new)")),
         Line::from("       (state changed since last_seen or new commit)"),
         Line::from(format!(
@@ -991,15 +1176,22 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::from(""),
         Line::from(Span::styled(
             "Keys",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )),
-        Line::from("  List    : ↑/↓ move  Enter open  Tab details  r refresh  / filter  ? help  q quit"),
+        Line::from(
+            "  List    : ↑/↓ move  Enter open  Tab details  r refresh  / filter  ? help  q quit",
+        ),
         Line::from("            Esc clears active filter (when not typing)"),
         Line::from("  Filter  : type to filter  ↑/↓ move  Enter open  Esc clear+exit"),
         Line::from("            Ctrl+n needs  Ctrl+c failing  Ctrl+v review  Ctrl+x clear"),
         Line::from("  Details : ↑/↓ select  Enter open check  f open failing  Tab back"),
         Line::from(""),
-        Line::from(Span::styled("Press ? or Esc to close.", Style::default().fg(Color::Gray))),
+        Line::from(Span::styled(
+            "Press ? or Esc to close.",
+            Style::default().fg(Color::Gray),
+        )),
     ]
 }
 
@@ -1015,7 +1207,8 @@ pub fn run_tui(
     }
     enable_raw_mode().map_err(|e| format!("Failed to enable raw mode: {e}"))?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).map_err(|e| format!("Failed to enter alt screen: {e}"))?;
+    execute!(stdout, EnterAlternateScreen)
+        .map_err(|e| format!("Failed to enter alt screen: {e}"))?;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal: Terminal<CrosstermBackend<Stdout>> =
@@ -1069,11 +1262,13 @@ pub fn run_tui(
                                 .filter(|p| p.category == Category::NeedsYou)
                                 .map(|p| p.pr.pr_key.clone())
                                 .collect();
-                            let entered_needs_you = new_prs
-                                .iter()
-                                .any(|p| p.category == Category::NeedsYou && !old_needs.contains(&p.pr.pr_key));
+                            let entered_needs_you = new_prs.iter().any(|p| {
+                                p.category == Category::NeedsYou
+                                    && !old_needs.contains(&p.pr.pr_key)
+                            });
                             let new_ci_failure = new_prs.iter().any(|p| p.is_new_ci_failure);
-                            let _new_review_request = new_prs.iter().any(|p| p.is_new_review_request);
+                            let _new_review_request =
+                                new_prs.iter().any(|p| p.is_new_review_request);
                             if entered_needs_you || new_ci_failure {
                                 let _ = execute!(terminal.backend_mut(), Print("\x07"));
                             }
@@ -1123,12 +1318,22 @@ pub fn run_tui(
                 if !state.filter_query.is_empty() {
                     parts.push(format!("q=\"{}\"", state.filter_query));
                 }
-                if state.only_needs_you { parts.push("needs".to_string()); }
-                if state.only_failing_ci { parts.push("failing".to_string()); }
-                if state.only_review_requested { parts.push("review".to_string()); }
+                if state.only_needs_you {
+                    parts.push("needs".to_string());
+                }
+                if state.only_failing_ci {
+                    parts.push("failing".to_string());
+                }
+                if state.only_review_requested {
+                    parts.push("review".to_string());
+                }
                 banner = format!("Filter: {}", parts.join("  "));
             }
-            let banner_opt = if banner.is_empty() { None } else { Some(banner.as_str()) };
+            let banner_opt = if banner.is_empty() {
+                None
+            } else {
+                Some(banner.as_str())
+            };
             let (l, v) = build_list_lines(
                 &state.prs,
                 inner_width,
@@ -1143,7 +1348,15 @@ pub fn run_tui(
             let key = state.details_pr_key.clone();
             let maybe = key.and_then(|k| state.prs.iter().find(|p| p.pr.pr_key == k).cloned());
             if let Some(pr) = maybe {
-                (build_details_lines(&pr, inner_width, content_height, state.details_ci_selected), Vec::new())
+                (
+                    build_details_lines(
+                        &pr,
+                        inner_width,
+                        content_height,
+                        state.details_ci_selected,
+                    ),
+                    Vec::new(),
+                )
             } else {
                 state.mode = ViewMode::List;
                 let filtered = filtered_indices(
@@ -1271,7 +1484,9 @@ pub fn run_tui(
                         (KeyCode::Enter, _) => {
                             // Live filtering already applied; Enter opens the selected PR (same as list mode).
                             if state.mode == ViewMode::List {
-                                if let Some(pr_idx) = visible_for_events.get(state.selected_idx).copied() {
+                                if let Some(pr_idx) =
+                                    visible_for_events.get(state.selected_idx).copied()
+                                {
                                     if let Some(pr) = state.prs.get_mut(pr_idx) {
                                         open_in_browser(&pr.pr.url);
                                     }
@@ -1403,7 +1618,9 @@ pub fn run_tui(
                     }
                     KeyCode::Tab => {
                         if state.mode == ViewMode::List {
-                            if let Some(pr_idx) = visible_for_events.get(state.selected_idx).copied() {
+                            if let Some(pr_idx) =
+                                visible_for_events.get(state.selected_idx).copied()
+                            {
                                 if let Some(pr) = state.prs.get(pr_idx) {
                                     state.details_pr_key = Some(pr.pr.pr_key.clone());
                                     state.mode = ViewMode::Details;
@@ -1457,7 +1674,9 @@ pub fn run_tui(
                     }
                     KeyCode::Enter => {
                         if state.mode == ViewMode::List {
-                            if let Some(pr_idx) = visible_for_events.get(state.selected_idx).copied() {
+                            if let Some(pr_idx) =
+                                visible_for_events.get(state.selected_idx).copied()
+                            {
                                 if let Some(pr) = state.prs.get_mut(pr_idx) {
                                     open_in_browser(&pr.pr.url);
                                 }
@@ -1488,8 +1707,8 @@ pub fn run_tui(
     disable_raw_mode().map_err(|e| format!("Failed to disable raw mode: {e}"))?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)
         .map_err(|e| format!("Failed to leave alt screen: {e}"))?;
-    terminal.show_cursor().map_err(|e| format!("Failed to show cursor: {e}"))?;
+    terminal
+        .show_cursor()
+        .map_err(|e| format!("Failed to show cursor: {e}"))?;
     Ok(())
 }
-
-

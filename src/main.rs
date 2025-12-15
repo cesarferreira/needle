@@ -7,14 +7,19 @@ mod timeutil;
 mod tui;
 
 use crate::db::{db_path, open_db};
-use crate::refresh::{load_cached, refresh, refresh_demo, ScopeFilters};
+use crate::refresh::{ScopeFilters, load_cached, refresh, refresh_demo};
 use crate::tui::{AppState, UiPrefs, run_tui};
 use clap::{ArgAction, Parser};
 use octocrab::Octocrab;
 use std::sync::Arc;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "needle", version, about = "TUI PR triage for GitHub", disable_version_flag = true)]
+#[command(
+    name = "needle",
+    version,
+    about = "TUI PR triage for GitHub",
+    disable_version_flag = true
+)]
 struct CliArgs {
     /// Print version information (-v, -V, --version).
     #[arg(short = 'v', long = "version", action = ArgAction::Version)]

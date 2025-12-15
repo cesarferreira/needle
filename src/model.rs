@@ -75,9 +75,7 @@ pub struct Pr {
 
     // Extra metadata for triage.
     pub is_draft: bool,
-    pub mergeable: Option<String>,         // e.g. "MERGEABLE" | "CONFLICTING" | "UNKNOWN"
-    pub merge_state_status: Option<String> // e.g. "CLEAN" | "BLOCKED" | ...
+    pub mergeable: Option<String>, // e.g. "MERGEABLE" | "CONFLICTING" | "UNKNOWN"
+    pub merge_state_status: Option<String>, // e.g. "CLEAN" | "BLOCKED" | ...
+    pub is_viewer_author: bool,    // true when this PR is authored by the signed-in user
 }
-
-
-
