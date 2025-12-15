@@ -1,5 +1,5 @@
 use crate::db::{DbPrRow, delete_prs_not_in, load_all_prs, now_unix, upsert_pr};
-use crate::demo::{generate_demo_prs, next_demo_tick, seeded_last_opened_at};
+use crate::demo::{generate_demo_prs, next_demo_tick};
 use crate::github::fetch_attention_prs;
 use crate::model::{CiCheck, CiState, Pr, ReviewState};
 use octocrab::Octocrab;
@@ -56,7 +56,6 @@ pub struct UiPr {
     pub score: i32,
     pub category: Category,
     pub display_status: String,
-    pub last_opened_at: Option<i64>,
     pub is_new_review_request: bool,
     pub is_new_ci_failure: bool,
 }
@@ -132,7 +131,6 @@ pub fn load_cached(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) ->
             score,
             category,
             display_status,
-            last_opened_at: row.last_opened_at,
             is_new_review_request: is_new_review,
             is_new_ci_failure,
         });
@@ -310,10 +308,6 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64, scope
         let new_review = is_new_review_request(&pr, old);
         let new_ci_failure = is_new_ci_failure(&pr, old);
 
-        let last_opened_at = old
-            .and_then(|r| r.last_opened_at)
-            .or_else(|| seeded_last_opened_at(&pr.pr_key, now));
-
         let db_row = DbPrRow {
             pr_key: pr.pr_key.clone(),
             owner: pr.owner.clone(),
@@ -331,7 +325,7 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64, scope
             mergeable: pr.mergeable.clone(),
             merge_state_status: pr.merge_state_status.clone(),
             last_seen_at: Some(now),
-            last_opened_at,
+            last_opened_at: old.and_then(|r| r.last_opened_at),
         };
         upsert_pr(conn, &db_row, now)?;
 
@@ -344,7 +338,6 @@ pub async fn refresh(conn: &Connection, octo: &Octocrab, cutoff_days: i64, scope
             score,
             category,
             display_status,
-            last_opened_at,
             is_new_review_request: new_review,
             is_new_ci_failure: new_ci_failure,
         });
@@ -383,8 +376,6 @@ pub fn refresh_demo(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) -
         let new_review = is_new_review_request(&pr, old);
         let new_ci_failure = is_new_ci_failure(&pr, old);
 
-        let last_opened_at = old.and_then(|r| r.last_opened_at);
-
         let db_row = DbPrRow {
             pr_key: pr.pr_key.clone(),
             owner: pr.owner.clone(),
@@ -402,7 +393,7 @@ pub fn refresh_demo(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) -
             mergeable: pr.mergeable.clone(),
             merge_state_status: pr.merge_state_status.clone(),
             last_seen_at: Some(now),
-            last_opened_at,
+            last_opened_at: old.and_then(|r| r.last_opened_at),
         };
         upsert_pr(conn, &db_row, now)?;
 
@@ -415,7 +406,6 @@ pub fn refresh_demo(conn: &Connection, cutoff_days: i64, scope: &ScopeFilters) -
             score,
             category,
             display_status,
-            last_opened_at,
             is_new_review_request: new_review,
             is_new_ci_failure: new_ci_failure,
         });

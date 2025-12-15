@@ -39,16 +39,6 @@ fn fnv1a_64(s: &str) -> u64 {
     h
 }
 
-pub fn seeded_last_opened_at(pr_key: &str, now: i64) -> Option<i64> {
-    let h = fnv1a_64(pr_key);
-    match h % 11 {
-        0 => Some(now.saturating_sub(23 * 60)),    // opened recently (dim)
-        1 => Some(now.saturating_sub(3 * 3600)),   // opened earlier today
-        2 => Some(now.saturating_sub(2 * 86400)),  // opened a couple days ago
-        _ => None,
-    }
-}
-
 fn short_sha(mut x: u64) -> String {
     // Deterministic 7-hex-ish "sha".
     let mut out = String::with_capacity(7);

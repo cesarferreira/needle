@@ -95,7 +95,7 @@ For each PR it computes:
 
 List view:
 - `↑ / ↓`: move selection
-- `Enter`: open selected PR in default browser (persists `last_opened_at`)
+- `Enter`: open selected PR in default browser
 - `Tab`: open details view
 - `/`: filter mode (type to filter by repo/title/author/#)
   - `Esc`: exit filter mode + clear filter text

@@ -217,19 +217,6 @@ ON CONFLICT(pr_key) DO UPDATE SET
     Ok(())
 }
 
-pub fn set_last_opened_at(conn: &Connection, pr_key: &str, ts: i64) -> Result<(), String> {
-    let updated = conn
-        .execute(
-            "UPDATE prs SET last_opened_at = ?1 WHERE pr_key = ?2",
-            params![ts, pr_key],
-        )
-        .map_err(|e| format!("Failed to update last_opened_at: {e}"))?;
-    if updated == 0 {
-        // Not fatal; it just means the PR is no longer in DB.
-    }
-    Ok(())
-}
-
 pub fn delete_prs_not_in(conn: &Connection, keep_pr_keys: &[String]) -> Result<(), String> {
     if keep_pr_keys.is_empty() {
         conn.execute("DELETE FROM prs", [])

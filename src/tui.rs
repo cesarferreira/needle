@@ -1,4 +1,4 @@
-use crate::db::{now_unix, set_last_opened_at};
+use crate::db::now_unix;
 use crate::refresh::{
     Category, UiPr, APPROVED_UNMERGED_OLD_SECS, CATEGORY_NEEDS_YOU_MIN, CATEGORY_NO_ACTION_MIN,
     CI_RUNNING_LONG_SECS, SCORE_APPROVED_UNMERGED_OLD, SCORE_CI_FAILED_NEW, SCORE_CI_FAILED_UNCHANGED,
@@ -704,12 +704,6 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
         ("Draft", if pr.pr.is_draft { "yes".to_string() } else { "no".to_string() }),
         ("Mergeable", pr.pr.mergeable.clone().unwrap_or_else(|| "unknown".to_string())),
         ("MergeState", pr.pr.merge_state_status.clone().unwrap_or_else(|| "unknown".to_string())),
-        (
-            "Opened",
-            pr.last_opened_at
-                .map(|t| human_age(now, t))
-                .unwrap_or_else(|| "never".to_string()),
-        ),
     ];
 
     for (k, v) in rows {
@@ -906,7 +900,7 @@ fn help_lines() -> Vec<Line<'static>> {
 }
 
 pub fn run_tui(
-    conn: &Connection,
+    _conn: &Connection,
     mut state: AppState,
     refresh_fn: Arc<dyn Fn() -> Result<Vec<UiPr>, String> + Send + Sync>,
     start_refresh_immediately: bool,
@@ -1229,9 +1223,6 @@ pub fn run_tui(
                                     .and_then(|c| c.url.as_deref())
                                     .unwrap_or(pr.pr.url.as_str());
                                 open_in_browser(url);
-                                let ts = now_unix();
-                                pr.last_opened_at = Some(ts);
-                                let _ = set_last_opened_at(conn, &pr.pr.pr_key, ts);
                             }
                         }
                     }
@@ -1319,9 +1310,6 @@ pub fn run_tui(
                             if let Some(pr_idx) = visible_for_events.get(state.selected_idx).copied() {
                                 if let Some(pr) = state.prs.get_mut(pr_idx) {
                                     open_in_browser(&pr.pr.url);
-                                    let ts = now_unix();
-                                    pr.last_opened_at = Some(ts);
-                                    let _ = set_last_opened_at(conn, &pr.pr.pr_key, ts);
                                 }
                             }
                         } else {
@@ -1338,9 +1326,6 @@ pub fn run_tui(
                                     .and_then(|c| c.url.as_deref())
                                     .unwrap_or(pr.pr.url.as_str());
                                 open_in_browser(url);
-                                let ts = now_unix();
-                                pr.last_opened_at = Some(ts);
-                                let _ = set_last_opened_at(conn, &pr.pr.pr_key, ts);
                             }
                         }
                     }
