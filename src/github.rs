@@ -325,31 +325,6 @@ query($page_size: Int!, $cursor: String, $search_query: String!) {
 }
 "#;
 
-fn map_ci_state(node: &PullRequestNode) -> CiState {
-    let Some(commits) = &node.commits else {
-        return CiState::None;
-    };
-    let Some(nodes) = &commits.nodes else {
-        return CiState::None;
-    };
-    let Some(first) = nodes.first() else {
-        return CiState::None;
-    };
-    let Some(commit) = &first.commit else {
-        return CiState::None;
-    };
-    let Some(rollup) = &commit.status_check_rollup else {
-        return CiState::None;
-    };
-    let state = rollup.state.as_deref().unwrap_or("");
-    match state {
-        "SUCCESS" => CiState::Success,
-        "FAILURE" | "ERROR" => CiState::Failure,
-        "PENDING" | "EXPECTED" => CiState::Running,
-        _ => CiState::None,
-    }
-}
-
 fn map_ci_checks(node: &PullRequestNode) -> Vec<CiCheck> {
     let Some(commits) = &node.commits else { return Vec::new() };
     let Some(nodes) = &commits.nodes else { return Vec::new() };
@@ -418,6 +393,36 @@ fn map_ci_checks(node: &PullRequestNode) -> Vec<CiCheck> {
     out
 }
 
+fn derive_ci_state(rollup_state: Option<&str>, checks: &[CiCheck]) -> CiState {
+    // Prefer the concrete list of checks (what we actually render) over the rollup state.
+    // This avoids showing "CI failed" when a previous run was cancelled but new checks are now running.
+    if checks.iter().any(|c| matches!(c.state, CiCheckState::Failure)) {
+        return CiState::Failure;
+    }
+    if checks.iter().any(|c| matches!(c.state, CiCheckState::Running)) {
+        return CiState::Running;
+    }
+    if checks.iter().any(|c| matches!(c.state, CiCheckState::Success)) {
+        return CiState::Success;
+    }
+
+    match rollup_state.unwrap_or("") {
+        "SUCCESS" => CiState::Success,
+        "FAILURE" | "ERROR" => CiState::Failure,
+        "PENDING" | "EXPECTED" => CiState::Running,
+        _ => CiState::None,
+    }
+}
+
+fn rollup_state(node: &PullRequestNode) -> Option<&str> {
+    let commits = node.commits.as_ref()?;
+    let nodes = commits.nodes.as_ref()?;
+    let first = nodes.first()?;
+    let commit = first.commit.as_ref()?;
+    let rollup = commit.status_check_rollup.as_ref()?;
+    rollup.state.as_deref()
+}
+
 fn map_review_state(node: &PullRequestNode, is_requested: bool) -> ReviewState {
     if is_requested {
         return ReviewState::Requested;
@@ -441,8 +446,8 @@ fn is_review_requested_by_user(node: &PullRequestNode, viewer_login: &str) -> bo
 }
 
 fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
-    let ci_state = map_ci_state(&node);
     let ci_checks = map_ci_checks(&node);
+    let ci_state = derive_ci_state(rollup_state(&node), &ci_checks);
     let last_commit_sha = node.head_ref_oid.clone();
     let review_state = map_review_state(&node, is_requested);
     let owner = node.repository.owner.login;
@@ -472,6 +477,41 @@ fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
         mergeable: node.mergeable.clone(),
         merge_state_status: node.merge_state_status.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_check(state: CiCheckState) -> CiCheck {
+        CiCheck {
+            name: "x".to_string(),
+            state,
+            url: None,
+            started_at_unix: None,
+        }
+    }
+
+    #[test]
+    fn derive_ci_state_prefers_running_checks_over_failure_rollup() {
+        let checks = vec![mk_check(CiCheckState::Running), mk_check(CiCheckState::Success)];
+        let s = derive_ci_state(Some("FAILURE"), &checks);
+        assert!(matches!(s, CiState::Running));
+    }
+
+    #[test]
+    fn derive_ci_state_failure_if_any_failed_check() {
+        let checks = vec![mk_check(CiCheckState::Failure), mk_check(CiCheckState::Running)];
+        let s = derive_ci_state(Some("PENDING"), &checks);
+        assert!(matches!(s, CiState::Failure));
+    }
+
+    #[test]
+    fn derive_ci_state_falls_back_to_rollup_when_no_signal_in_checks() {
+        let checks = vec![mk_check(CiCheckState::Neutral)];
+        let s = derive_ci_state(Some("PENDING"), &checks);
+        assert!(matches!(s, CiState::Running));
+    }
 }
 
 pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64, include_team_requests: bool) -> Result<Vec<Pr>, String> {
