@@ -5,7 +5,7 @@
   </p>
 
   <p>
-    <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/rust-2024%20edition-dea584"></a>
+    <a href="https://github.com/cesarferreira/needle/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cesarferreira/needle/actions/workflows/ci.yml/badge.svg"></a>
     <a href="https://crates.io/crates/needle-cli"><img alt="Crates.io" src="https://img.shields.io/crates/v/needle-cli"></a>
     <img alt="TUI" src="https://img.shields.io/badge/TUI-ratatui-5f5fff">
     <img alt="Async" src="https://img.shields.io/badge/async-tokio-2f74c0">
