@@ -15,7 +15,7 @@ use crossterm::tty::IsTty;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Alignment;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
@@ -23,10 +23,12 @@ use rusqlite::Connection;
 use std::collections::HashSet;
 use std::io::{self, Stdout};
 use std::process::Command;
+use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use std::time::Instant;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use update_informer::{Check, registry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -71,6 +73,7 @@ pub struct AppState {
     pub(crate) only_needs_you: bool,
     pub(crate) only_failing_ci: bool,
     pub(crate) only_review_requested: bool,
+    pub(crate) update_notice: Option<String>,
 }
 
 impl AppState {
@@ -93,8 +96,29 @@ impl AppState {
             only_needs_you: false,
             only_failing_ci: false,
             only_review_requested: false,
+            update_notice: None,
         }
     }
+}
+
+fn spawn_update_check() -> Option<mpsc::Receiver<String>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let informer = update_informer::new(
+            registry::Crates,
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        );
+        if let Ok(Some(version)) = informer.check_version() {
+            let msg = format!(
+                "Update available: v{version} (current v{}) — install with `cargo install {} --locked --force`",
+                env!("CARGO_PKG_VERSION"),
+                env!("CARGO_PKG_NAME"),
+            );
+            let _ = tx.send(msg);
+        }
+    });
+    Some(rx)
 }
 
 fn category_title(cat: Category) -> &'static str {
@@ -1215,6 +1239,7 @@ pub fn run_tui(
         Terminal::new(backend).map_err(|e| format!("Failed to init terminal: {e}"))?;
 
     let mut refresh_rx: Option<mpsc::Receiver<Result<Vec<UiPr>, String>>> = None;
+    let mut update_rx = spawn_update_check();
 
     if start_refresh_immediately && !state.refreshing {
         state.refreshing = true;
@@ -1229,6 +1254,20 @@ pub fn run_tui(
     }
 
     loop {
+        // Non-blocking update check result.
+        if let Some(rx) = &update_rx {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    state.update_notice = Some(msg);
+                    update_rx = None;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    update_rx = None;
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+
         // Auto refresh in details view every 30s (non-blocking).
         if state.mode == ViewMode::Details && !state.refreshing {
             let should = state
@@ -1405,9 +1444,29 @@ pub fn run_tui(
                 let content = Paragraph::new(text);
                 f.render_widget(content, parts[0]);
 
-                // Footer (bottom, right-aligned)
-                let footer = Paragraph::new(footer_line.clone()).alignment(Alignment::Right);
-                f.render_widget(footer, parts[1]);
+                // Footer (bottom): update notice on the left, controls on the right.
+                let footer_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .split(parts[1]);
+
+                let left_line = if let Some(msg) = state.update_notice.as_deref() {
+                    let w = footer_chunks[0].width.max(1) as usize;
+                    let txt = truncate_ellipsis(msg, w.saturating_sub(1));
+                    Line::from(Span::styled(
+                        txt,
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                } else {
+                    Line::from("")
+                };
+                let footer_left = Paragraph::new(left_line).alignment(Alignment::Left);
+                f.render_widget(footer_left, footer_chunks[0]);
+
+                let footer_right = Paragraph::new(footer_line.clone()).alignment(Alignment::Right);
+                f.render_widget(footer_right, footer_chunks[1]);
 
                 if state.help_open {
                     // Centered modal overlay.
