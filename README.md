@@ -103,6 +103,7 @@ List view:
   - `Ctrl+c`: toggle “only failing CI”
   - `Ctrl+v`: toggle “only review requested”
   - `Ctrl+x`: clear all filters
+- `?`: help (explains what each section means)
 - `r`: refresh now (shows shimmer while refreshing)
 - `q`: quit
 

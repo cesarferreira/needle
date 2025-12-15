@@ -1,5 +1,9 @@
 use crate::db::{now_unix, set_last_opened_at};
-use crate::refresh::{Category, UiPr};
+use crate::refresh::{
+    Category, UiPr, APPROVED_UNMERGED_OLD_SECS, CATEGORY_NEEDS_YOU_MIN, CATEGORY_NO_ACTION_MIN,
+    CI_RUNNING_LONG_SECS, SCORE_APPROVED_UNMERGED_OLD, SCORE_CI_FAILED_NEW, SCORE_CI_FAILED_UNCHANGED,
+    SCORE_CI_RUNNING_LONG, SCORE_REVIEW_REQUESTED, SCORE_WAITING_ON_OTHERS_GREEN,
+};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::style::Print;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
@@ -10,7 +14,7 @@ use ratatui::layout::Alignment;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Terminal;
 use rusqlite::Connection;
 use std::io::{self, Stdout};
@@ -54,6 +58,7 @@ pub struct AppState {
     pub(crate) details_ci_selected: usize,
     pub(crate) details_last_auto_refresh: Option<Instant>,
     pub(crate) ui: UiPrefs,
+    pub(crate) help_open: bool,
 
     // List filters/search.
     pub(crate) filter_query: String,
@@ -77,6 +82,7 @@ impl AppState {
             details_ci_selected: 0,
             details_last_auto_refresh: None,
             ui,
+            help_open: false,
             filter_query: String::new(),
             filter_editing: false,
             filter_edit: String::new(),
@@ -91,8 +97,8 @@ impl AppState {
 fn category_title(cat: Category) -> &'static str {
     match cat {
         Category::NeedsYou => "🔥 NEEDS YOU",
-        Category::Waiting => "⏳ WAITING",
-        Category::Stale => "⚠️ STALE",
+        Category::Waiting => "✅ NO ACTION NEEDED",
+        Category::Stale => "⏳ WAITING ON OTHERS",
     }
 }
 
@@ -550,6 +556,7 @@ fn build_footer(
                     keycap("Ctrl+c"), label("failing"), sep(),
                     keycap("Ctrl+v"), label("review"), sep(),
                     keycap("Ctrl+x"), label("clear"),
+                    sep(), keycap("?"), label("help"),
                 ]);
             } else {
                 segs.extend([
@@ -565,6 +572,7 @@ fn build_footer(
                     },
                     sep(),
                     keycap("/"), label("filter"), sep(),
+                    keycap("?"), label("help"), sep(),
                     keycap("Enter"), label("open"), sep(),
                     keycap("Tab"), label("details"), sep(),
                     keycap("↑/↓"), label("move"),
@@ -586,6 +594,7 @@ fn build_footer(
                     label("refresh")
                 },
                 sep(),
+                keycap("?"), label("help"), sep(),
                 keycap("q"), label("quit"),
                 sep(),
                 keycap("↑/↓"), label("select"),
@@ -617,6 +626,8 @@ fn build_footer(
                 sep(),
                 keycap("/"), label("filter"),
                 sep(),
+                keycap("?"), label("help"),
+                sep(),
                 keycap("Enter"), label("open"), sep(),
                 keycap("Tab"), label("details"), sep(),
                 keycap("↑/↓"), label("move"),
@@ -634,6 +645,7 @@ fn build_footer(
                     label("refresh")
                 },
                 sep(),
+                keycap("?"), label("help"), sep(),
                 keycap("q"), label("quit"),
             ],
         };
@@ -821,6 +833,76 @@ fn clamp_selection(selected: &mut usize, visible_len: usize) {
     } else if *selected >= visible_len {
         *selected = visible_len - 1;
     }
+}
+
+fn help_lines() -> Vec<Line<'static>> {
+    let mins = |s: i64| s / 60;
+    let hours = |s: i64| s / 3600;
+    vec![
+        Line::from(Span::styled(
+            "needle help",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "─".repeat(60),
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("🔥 NEEDS YOU", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": score >= 40 (urgent)."),
+        ]),
+        Line::from(vec![
+            Span::styled("✅ NO ACTION NEEDED", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": score 0..39 (informational / in-progress / neutral)."),
+        ]),
+        Line::from(vec![
+            Span::styled("⏳ WAITING ON OTHERS", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": score < 0 (currently: CI green + no review requested)."),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Scoring (higher = more urgent)",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(format!("  +{SCORE_REVIEW_REQUESTED}  review requested from you")),
+        Line::from(format!(
+            "  +{SCORE_CI_FAILED_NEW}  CI failed (new) (state changed since last_seen or new commit)"
+        )),
+        Line::from(format!(
+            "  +{SCORE_CI_RUNNING_LONG}  CI running longer than {} minutes",
+            mins(CI_RUNNING_LONG_SECS)
+        )),
+        Line::from(format!(
+            "  +{SCORE_APPROVED_UNMERGED_OLD}  approved but unmerged for >{}h",
+            hours(APPROVED_UNMERGED_OLD_SECS)
+        )),
+        Line::from(format!(
+            "  {SCORE_WAITING_ON_OTHERS_GREEN}  waiting on others (no review requested, CI green, not approved)"
+        )),
+        Line::from(format!(
+            "  {SCORE_CI_FAILED_UNCHANGED}  CI failed but unchanged since last_seen"
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!(
+                "Categories are score buckets: NEEDS YOU >= {CATEGORY_NEEDS_YOU_MIN}, NO ACTION NEEDED {CATEGORY_NO_ACTION_MIN}..{}, WAITING ON OTHERS < {CATEGORY_NO_ACTION_MIN}",
+                CATEGORY_NEEDS_YOU_MIN - 1
+            ),
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Keys",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  List:  ↑/↓ move, Enter open PR, Tab details, r refresh, / filter, ? help, q quit"),
+        Line::from("  Filter: type to filter, ↑/↓ move, Esc clear+exit, Enter keep+exit"),
+        Line::from("          Ctrl+n needs, Ctrl+c failing, Ctrl+v review, Ctrl+x clear all"),
+        Line::from("  Details: ↑/↓ select check, Enter open, f open first failing, Tab back"),
+        Line::from(""),
+        Line::from(Span::styled("Press ? or Esc to close.", Style::default().fg(Color::Gray))),
+    ]
 }
 
 pub fn run_tui(
@@ -1015,6 +1097,23 @@ pub fn run_tui(
                 // Footer (bottom, right-aligned)
                 let footer = Paragraph::new(footer_line.clone()).alignment(Alignment::Right);
                 f.render_widget(footer, parts[1]);
+
+                if state.help_open {
+                    // Centered modal overlay.
+                    let w = (inner.width as f32 * 0.85) as u16;
+                    let h = (inner.height as f32 * 0.70) as u16;
+                    let popup = ratatui::layout::Rect {
+                        x: inner.x + (inner.width.saturating_sub(w)) / 2,
+                        y: inner.y + (inner.height.saturating_sub(h)) / 2,
+                        width: w.max(20),
+                        height: h.max(8),
+                    };
+                    f.render_widget(Clear, popup);
+                    let b = Block::default().title("Help").borders(Borders::ALL);
+                    let t = Text::from(help_lines());
+                    let p = Paragraph::new(t).block(b).wrap(Wrap { trim: false });
+                    f.render_widget(p, popup);
+                }
             })
             .map_err(|e| format!("Draw failed: {e}"))?;
 
@@ -1024,6 +1123,15 @@ pub fn run_tui(
                 if k.kind != KeyEventKind::Press {
                     continue;
                 }
+                if state.help_open {
+                    match k.code {
+                        KeyCode::Char('?') | KeyCode::Esc => state.help_open = false,
+                        KeyCode::Char('q') => state.help_open = false,
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 if state.filter_editing {
                     match (k.code, k.modifiers) {
                         (KeyCode::Up, _) => {
@@ -1087,6 +1195,9 @@ pub fn run_tui(
                 }
 
                 match k.code {
+                    KeyCode::Char('?') => {
+                        state.help_open = !state.help_open;
+                    }
                     KeyCode::Char('q') => break,
                     KeyCode::Char('r') => {
                         if !state.refreshing {

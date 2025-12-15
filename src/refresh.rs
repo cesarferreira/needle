@@ -6,6 +6,20 @@ use octocrab::Octocrab;
 use rusqlite::Connection;
 use std::collections::HashMap;
 
+// Scoring constants (single source of truth, also used by TUI help).
+pub const SCORE_REVIEW_REQUESTED: i32 = 50;
+pub const SCORE_CI_FAILED_NEW: i32 = 40;
+pub const SCORE_CI_RUNNING_LONG: i32 = 20;
+pub const SCORE_APPROVED_UNMERGED_OLD: i32 = 15;
+pub const SCORE_WAITING_ON_OTHERS_GREEN: i32 = -20;
+pub const SCORE_CI_FAILED_UNCHANGED: i32 = -30;
+
+pub const CATEGORY_NEEDS_YOU_MIN: i32 = 40;
+pub const CATEGORY_NO_ACTION_MIN: i32 = 0;
+
+pub const CI_RUNNING_LONG_SECS: i64 = 10 * 60;
+pub const APPROVED_UNMERGED_OLD_SECS: i64 = 24 * 3600;
+
 #[derive(Debug, Clone, Default)]
 pub struct ScopeFilters {
     pub orgs: Vec<String>,
@@ -156,38 +170,38 @@ fn score_pr(pr: &Pr, old: Option<&DbPrRow>, now: i64, is_new_ci_failure: bool) -
 
     // +50  review requested from user
     if matches!(pr.review_state, ReviewState::Requested) {
-        score += 50;
+        score += SCORE_REVIEW_REQUESTED;
     }
 
     // CI failure scoring
     if matches!(pr.ci_state, CiState::Failure) {
         if is_new_ci_failure {
             // +40  CI failed AND state changed since last_seen (or commit changed)
-            score += 40;
+            score += SCORE_CI_FAILED_NEW;
         } else {
             // -30  CI failed but unchanged since last_seen
-            score -= 30;
+            score += SCORE_CI_FAILED_UNCHANGED;
         }
     }
 
     // +20  CI running longer than 10 minutes (using updatedAt proxy)
     if matches!(pr.ci_state, CiState::Running) {
-        if running_for_secs(pr, now) > 10 * 60 {
-            score += 20;
+        if running_for_secs(pr, now) > CI_RUNNING_LONG_SECS {
+            score += SCORE_CI_RUNNING_LONG;
         }
     }
 
     // +15 approved but unmerged for >24h
     if matches!(pr.review_state, ReviewState::Approved) {
-        if now.saturating_sub(pr.updated_at_unix) > 24 * 3600 {
-            score += 15;
+        if now.saturating_sub(pr.updated_at_unix) > APPROVED_UNMERGED_OLD_SECS {
+            score += SCORE_APPROVED_UNMERGED_OLD;
         }
     }
 
     // -20 waiting on others (no review requested, CI green)
     // Note: don't penalize "approved" PRs; those are often actionable (merge/queue) even though no review is requested.
     if matches!(pr.review_state, ReviewState::None) && matches!(pr.ci_state, CiState::Success) {
-        score -= 20;
+        score += SCORE_WAITING_ON_OTHERS_GREEN;
     }
 
     // Note: `old` currently unused beyond is_new_ci_failure; keep signature stable for V1.
@@ -196,9 +210,9 @@ fn score_pr(pr: &Pr, old: Option<&DbPrRow>, now: i64, is_new_ci_failure: bool) -
 }
 
 fn category_for(score: i32) -> Category {
-    if score >= 40 {
+    if score >= CATEGORY_NEEDS_YOU_MIN {
         Category::NeedsYou
-    } else if score >= 0 {
+    } else if score >= CATEGORY_NO_ACTION_MIN {
         Category::Waiting
     } else {
         Category::Stale
