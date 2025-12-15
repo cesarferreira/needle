@@ -34,7 +34,7 @@ impl ReviewState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum CiCheckState {
     Success,
     Failure,
@@ -49,7 +49,7 @@ impl CiCheckState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CiCheck {
     pub name: String,
     pub state: CiCheckState,
@@ -72,6 +72,11 @@ pub struct Pr {
     pub ci_state: CiState,
     pub ci_checks: Vec<CiCheck>,
     pub review_state: ReviewState,
+
+    // Extra metadata for triage.
+    pub is_draft: bool,
+    pub mergeable: Option<String>,         // e.g. "MERGEABLE" | "CONFLICTING" | "UNKNOWN"
+    pub merge_state_status: Option<String> // e.g. "CLEAN" | "BLOCKED" | ...
 }
 
 

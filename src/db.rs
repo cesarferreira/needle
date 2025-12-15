@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,10 +11,16 @@ pub struct DbPrRow {
     pub number: i64,
     pub title: String,
     pub url: String,
+    pub author: Option<String>,
+    pub updated_at_unix: Option<i64>,
 
     pub last_commit_sha: Option<String>,
     pub last_ci_state: Option<String>,
     pub last_review_state: Option<String>,
+    pub ci_checks_json: Option<String>,
+    pub is_draft: Option<i64>,
+    pub mergeable: Option<String>,
+    pub merge_state_status: Option<String>,
 
     pub last_seen_at: Option<i64>,
     pub last_opened_at: Option<i64>,
@@ -38,6 +44,7 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
     }
     let conn = Connection::open(path).map_err(|e| format!("Failed to open sqlite db: {e}"))?;
     init_schema(&conn)?;
+    migrate_schema(&conn)?;
     Ok(conn)
 }
 
@@ -51,10 +58,16 @@ CREATE TABLE IF NOT EXISTS prs (
   number INTEGER NOT NULL,
   title TEXT NOT NULL,
   url TEXT NOT NULL,
+  author TEXT,
+  updated_at_unix INTEGER,
 
   last_commit_sha TEXT,
   last_ci_state TEXT,              -- success | failure | running | none
   last_review_state TEXT,          -- requested | approved | none
+  ci_checks_json TEXT,             -- JSON array of CI checks (optional)
+  is_draft INTEGER,                -- 0/1
+  mergeable TEXT,                  -- GitHub enum as string
+  merge_state_status TEXT,         -- GitHub enum as string
 
   last_seen_at INTEGER,            -- unix timestamp
   last_opened_at INTEGER           -- unix timestamp
@@ -65,13 +78,51 @@ CREATE TABLE IF NOT EXISTS prs (
     Ok(())
 }
 
+fn migrate_schema(conn: &Connection) -> Result<(), String> {
+    // Minimal forward-only migrations: add columns if missing.
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(prs)")
+        .map_err(|e| format!("Failed to read schema info: {e}"))?;
+    let cols_iter = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("Failed to query schema info: {e}"))?;
+    let mut existing = std::collections::HashSet::new();
+    for c in cols_iter {
+        existing.insert(c.map_err(|e| format!("Failed to decode schema info: {e}"))?);
+    }
+
+    fn add_if_missing(
+        conn: &Connection,
+        existing: &std::collections::HashSet<String>,
+        name: &str,
+        sql_type: &str,
+    ) -> Result<(), String> {
+        if existing.contains(name) {
+            return Ok(());
+        }
+        conn.execute(&format!("ALTER TABLE prs ADD COLUMN {name} {sql_type}"), [])
+            .map_err(|e| format!("Failed to migrate schema (add {name}): {e}"))?;
+        Ok(())
+    }
+
+    add_if_missing(conn, &existing, "author", "TEXT")?;
+    add_if_missing(conn, &existing, "updated_at_unix", "INTEGER")?;
+    add_if_missing(conn, &existing, "ci_checks_json", "TEXT")?;
+    add_if_missing(conn, &existing, "is_draft", "INTEGER")?;
+    add_if_missing(conn, &existing, "mergeable", "TEXT")?;
+    add_if_missing(conn, &existing, "merge_state_status", "TEXT")?;
+
+    Ok(())
+}
+
 pub fn load_all_prs(conn: &Connection) -> Result<HashMap<String, DbPrRow>, String> {
     let mut stmt = conn
         .prepare(
             r#"
 SELECT
-  pr_key, owner, repo, number, title, url,
+  pr_key, owner, repo, number, title, url, author, updated_at_unix,
   last_commit_sha, last_ci_state, last_review_state,
+  ci_checks_json, is_draft, mergeable, merge_state_status,
   last_seen_at, last_opened_at
 FROM prs
 "#,
@@ -94,11 +145,17 @@ FROM prs
             number: row.get(3).map_err(|e| format!("Row decode: {e}"))?,
             title: row.get(4).map_err(|e| format!("Row decode: {e}"))?,
             url: row.get(5).map_err(|e| format!("Row decode: {e}"))?,
-            last_commit_sha: row.get(6).map_err(|e| format!("Row decode: {e}"))?,
-            last_ci_state: row.get(7).map_err(|e| format!("Row decode: {e}"))?,
-            last_review_state: row.get(8).map_err(|e| format!("Row decode: {e}"))?,
-            last_seen_at: row.get(9).map_err(|e| format!("Row decode: {e}"))?,
-            last_opened_at: row.get(10).map_err(|e| format!("Row decode: {e}"))?,
+            author: row.get(6).map_err(|e| format!("Row decode: {e}"))?,
+            updated_at_unix: row.get(7).map_err(|e| format!("Row decode: {e}"))?,
+            last_commit_sha: row.get(8).map_err(|e| format!("Row decode: {e}"))?,
+            last_ci_state: row.get(9).map_err(|e| format!("Row decode: {e}"))?,
+            last_review_state: row.get(10).map_err(|e| format!("Row decode: {e}"))?,
+            ci_checks_json: row.get(11).map_err(|e| format!("Row decode: {e}"))?,
+            is_draft: row.get(12).map_err(|e| format!("Row decode: {e}"))?,
+            mergeable: row.get(13).map_err(|e| format!("Row decode: {e}"))?,
+            merge_state_status: row.get(14).map_err(|e| format!("Row decode: {e}"))?,
+            last_seen_at: row.get(15).map_err(|e| format!("Row decode: {e}"))?,
+            last_opened_at: row.get(16).map_err(|e| format!("Row decode: {e}"))?,
         };
         out.insert(pr.pr_key.clone(), pr);
     }
@@ -109,13 +166,15 @@ pub fn upsert_pr(conn: &Connection, pr: &DbPrRow, last_seen_at: i64) -> Result<(
     conn.execute(
         r#"
 INSERT INTO prs (
-  pr_key, owner, repo, number, title, url,
+  pr_key, owner, repo, number, title, url, author, updated_at_unix,
   last_commit_sha, last_ci_state, last_review_state,
+  ci_checks_json, is_draft, mergeable, merge_state_status,
   last_seen_at, last_opened_at
 ) VALUES (
-  ?1, ?2, ?3, ?4, ?5, ?6,
-  ?7, ?8, ?9,
-  ?10, ?11
+  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+  ?9, ?10, ?11,
+  ?12, ?13, ?14, ?15,
+  ?16, ?17
 )
 ON CONFLICT(pr_key) DO UPDATE SET
   owner = excluded.owner,
@@ -123,9 +182,15 @@ ON CONFLICT(pr_key) DO UPDATE SET
   number = excluded.number,
   title = excluded.title,
   url = excluded.url,
+  author = excluded.author,
+  updated_at_unix = excluded.updated_at_unix,
   last_commit_sha = excluded.last_commit_sha,
   last_ci_state = excluded.last_ci_state,
   last_review_state = excluded.last_review_state,
+  ci_checks_json = excluded.ci_checks_json,
+  is_draft = excluded.is_draft,
+  mergeable = excluded.mergeable,
+  merge_state_status = excluded.merge_state_status,
   last_seen_at = excluded.last_seen_at
 "#,
         params![
@@ -135,9 +200,15 @@ ON CONFLICT(pr_key) DO UPDATE SET
             pr.number,
             pr.title,
             pr.url,
+            pr.author,
+            pr.updated_at_unix,
             pr.last_commit_sha,
             pr.last_ci_state,
             pr.last_review_state,
+            pr.ci_checks_json,
+            pr.is_draft,
+            pr.mergeable,
+            pr.merge_state_status,
             last_seen_at,
             pr.last_opened_at
         ],

@@ -7,63 +7,53 @@ mod timeutil;
 mod tui;
 
 use crate::db::{db_path, open_db};
-use crate::refresh::{load_cached, refresh, refresh_demo};
+use crate::refresh::{load_cached, refresh, refresh_demo, ScopeFilters};
 use crate::tui::{AppState, run_tui};
+use clap::Parser;
 use octocrab::Octocrab;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Parser, Debug, Clone)]
+#[command(name = "needle", version, about = "TUI PR triage for GitHub")]
 struct CliArgs {
+    /// Only include PRs updated in the last N days.
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(i64).range(0..))]
     days: i64,
-    demo: bool,
-}
 
-fn parse_args() -> CliArgs {
-    // Default: last 30 days.
-    let mut days: i64 = 30;
-    let mut demo = false;
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let mut i = 0usize;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--days" => {
-                if i + 1 >= args.len() {
-                    eprintln!("Missing value for --days");
-                    std::process::exit(2);
-                }
-                days = args[i + 1].parse::<i64>().unwrap_or_else(|_| {
-                    eprintln!("Invalid --days value: {}", args[i + 1]);
-                    std::process::exit(2);
-                });
-                if days < 0 {
-                    eprintln!("--days must be >= 0");
-                    std::process::exit(2);
-                }
-                i += 2;
-            }
-            "--demo" => {
-                demo = true;
-                i += 1;
-            }
-            "--help" | "-h" => {
-                println!(
-                    "needle\n\nUSAGE:\n  needle [--days <N>] [--demo]\n\nOPTIONS:\n  --days <N>   Only include PRs updated in the last N days (default: 30)\n  --demo       Start with diverse fake data (no GitHub token required)\n  -h, --help   Print help\n"
-                );
-                std::process::exit(0);
-            }
-            _ => {
-                // Ignore unknown args in V1.
-                i += 1;
-            }
-        }
-    }
-    CliArgs { days, demo }
+    /// Start with diverse fake data (no GitHub token required).
+    #[arg(long)]
+    demo: bool,
+
+    /// Only show PRs from these orgs/users (repeatable or comma-delimited).
+    #[arg(long, value_delimiter = ',', num_args = 0..)]
+    org: Vec<String>,
+
+    /// Only show these repos (owner/repo) (repeatable or comma-delimited).
+    #[arg(long, value_delimiter = ',', num_args = 0..)]
+    include: Vec<String>,
+
+    /// Exclude these repos (owner/repo) (repeatable or comma-delimited).
+    #[arg(long, value_delimiter = ',', num_args = 0..)]
+    exclude: Vec<String>,
+
+    /// Include PRs requested to teams you are in (default: only explicit user requests).
+    #[arg(long)]
+    include_team_requests: bool,
+
+    /// Emit a terminal bell on important new events.
+    #[arg(long)]
+    bell: bool,
 }
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    let args = parse_args();
+    let args = CliArgs::parse();
     let days = args.days;
+    let scope = ScopeFilters {
+        orgs: args.org.clone(),
+        include_repos: args.include.clone(),
+        exclude_repos: args.exclude.clone(),
+    };
 
     if args.demo {
         let demo_path = std::path::PathBuf::from("target/needle-demo/prs.sqlite");
@@ -73,18 +63,19 @@ async fn main() {
         });
 
         // Seed once, then run again so some CI failures look "unchanged" on first render.
-        let _ = refresh_demo(&conn, days);
-        let demo_prs = refresh_demo(&conn, days).unwrap_or_else(|_e| Vec::new());
+        let _ = refresh_demo(&conn, days, &scope);
+        let demo_prs = refresh_demo(&conn, days, &scope).unwrap_or_else(|_e| Vec::new());
         let state = AppState::new(demo_prs);
 
         let demo_path_for_refresh = demo_path.clone();
+        let scope_for_refresh = scope.clone();
         let refresh_fn: Arc<dyn Fn() -> Result<Vec<crate::refresh::UiPr>, String> + Send + Sync> =
             Arc::new(move || {
                 let c = open_db(&demo_path_for_refresh)?;
-                refresh_demo(&c, days)
+                refresh_demo(&c, days, &scope_for_refresh)
             });
 
-        if let Err(e) = run_tui(&conn, state, refresh_fn, false) {
+        if let Err(e) = run_tui(&conn, state, refresh_fn, false, args.bell) {
             eprintln!("{e}");
             std::process::exit(1);
         }
@@ -115,25 +106,41 @@ async fn main() {
     });
 
     // Fast startup: render cached SQLite snapshot immediately, then refresh in background.
-    let cached = load_cached(&conn, days).unwrap_or_else(|_e| Vec::new());
+    let cached = load_cached(&conn, days, &scope).unwrap_or_else(|_e| Vec::new());
     let state = AppState::new(cached);
 
     let handle = tokio::runtime::Handle::current();
     let db_path_for_refresh = path.clone();
     let octo_for_refresh = octo.clone();
     let handle_for_refresh = handle.clone();
+    let scope_for_refresh = scope.clone();
+    let include_team_requests = args.include_team_requests;
     let refresh_fn: Arc<dyn Fn() -> Result<Vec<crate::refresh::UiPr>, String> + Send + Sync> =
         Arc::new(move || {
             let c = open_db(&db_path_for_refresh)?;
             // Called from a non-runtime worker thread (for shimmer), so this uses handle.block_on.
             if tokio::runtime::Handle::try_current().is_ok() {
-                tokio::task::block_in_place(|| handle_for_refresh.block_on(refresh(&c, &octo_for_refresh, days)))
+                tokio::task::block_in_place(|| {
+                    handle_for_refresh.block_on(refresh(
+                        &c,
+                        &octo_for_refresh,
+                        days,
+                        &scope_for_refresh,
+                        include_team_requests,
+                    ))
+                })
             } else {
-                handle_for_refresh.block_on(refresh(&c, &octo_for_refresh, days))
+                handle_for_refresh.block_on(refresh(
+                    &c,
+                    &octo_for_refresh,
+                    days,
+                    &scope_for_refresh,
+                    include_team_requests,
+                ))
             }
         });
 
-    if let Err(e) = run_tui(&conn, state, refresh_fn, true) {
+    if let Err(e) = run_tui(&conn, state, refresh_fn, true, args.bell) {
         eprintln!("{e}");
         std::process::exit(1);
     }

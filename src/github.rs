@@ -117,6 +117,11 @@ struct PullRequestNode {
     head_ref_oid: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
+    #[serde(rename = "isDraft")]
+    is_draft: Option<bool>,
+    mergeable: Option<String>,
+    #[serde(rename = "mergeStateStatus")]
+    merge_state_status: Option<String>,
     commits: Option<Commits>,
 }
 
@@ -168,6 +173,11 @@ struct SearchNode {
     head_ref_oid: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
+    #[serde(rename = "isDraft")]
+    is_draft: Option<bool>,
+    mergeable: Option<String>,
+    #[serde(rename = "mergeStateStatus")]
+    merge_state_status: Option<String>,
     commits: Option<Commits>,
 }
 
@@ -186,6 +196,9 @@ impl SearchNode {
             review_requests: self.review_requests,
             head_ref_oid: self.head_ref_oid,
             review_decision: self.review_decision,
+            is_draft: self.is_draft,
+            mergeable: self.mergeable,
+            merge_state_status: self.merge_state_status,
             commits: self.commits,
         })
     }
@@ -210,6 +223,9 @@ query($page_size: Int!, $cursor: String) {
         updatedAt
         headRefOid
         reviewDecision
+        isDraft
+        mergeable
+        mergeStateStatus
         repository { name owner { login } }
         reviewRequests(first: 50) {
           nodes {
@@ -265,6 +281,9 @@ query($page_size: Int!, $cursor: String, $search_query: String!) {
         updatedAt
         headRefOid
         reviewDecision
+        isDraft
+        mergeable
+        mergeStateStatus
         repository { name owner { login } }
         reviewRequests(first: 50) {
           nodes {
@@ -449,10 +468,13 @@ fn to_pr(node: PullRequestNode, is_requested: bool) -> Option<Pr> {
         ci_state,
         ci_checks,
         review_state,
+        is_draft: node.is_draft.unwrap_or(false),
+        mergeable: node.mergeable.clone(),
+        merge_state_status: node.merge_state_status.clone(),
     })
 }
 
-pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64) -> Result<Vec<Pr>, String> {
+pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64, include_team_requests: bool) -> Result<Vec<Pr>, String> {
     // Fetch authored PRs
     let mut authored: Vec<PullRequestNode> = Vec::new();
     let mut cursor: Option<String> = None;
@@ -549,7 +571,7 @@ pub async fn fetch_attention_prs(octo: &Octocrab, cutoff_ts: i64) -> Result<Vec<
                     }
                     // Only keep PRs where the viewer is explicitly requested as a User reviewer
                     // (ignore team review requests).
-                    if is_review_requested_by_user(&pr, &viewer_login) {
+                    if include_team_requests || is_review_requested_by_user(&pr, &viewer_login) {
                         requested_nodes.push(pr);
                     }
                 }

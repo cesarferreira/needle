@@ -328,6 +328,9 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
                 ci_state,
                 ci_checks,
                 review_state: s.review.clone(),
+                is_draft: false,
+                mergeable: Some("MERGEABLE".to_string()),
+                merge_state_status: Some("CLEAN".to_string()),
             }
         })
         .collect()

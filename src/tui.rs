@@ -1,6 +1,7 @@
 use crate::db::{now_unix, set_last_opened_at};
 use crate::refresh::{Category, UiPr};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::style::Print;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::tty::IsTty;
 use crossterm::execute;
@@ -18,6 +19,7 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use std::time::Instant;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -34,6 +36,15 @@ pub struct AppState {
     pub(crate) shimmer_phase: u8,
     pub(crate) details_ci_selected: usize,
     pub(crate) details_last_auto_refresh: Option<Instant>,
+
+    // List filters/search.
+    pub(crate) filter_query: String,
+    pub(crate) filter_editing: bool,
+    pub(crate) filter_edit: String,
+    pub(crate) filter_prev_query: String,
+    pub(crate) only_needs_you: bool,
+    pub(crate) only_failing_ci: bool,
+    pub(crate) only_review_requested: bool,
 }
 
 impl AppState {
@@ -47,6 +58,13 @@ impl AppState {
             shimmer_phase: 0,
             details_ci_selected: 0,
             details_last_auto_refresh: None,
+            filter_query: String::new(),
+            filter_editing: false,
+            filter_edit: String::new(),
+            filter_prev_query: String::new(),
+            only_needs_you: false,
+            only_failing_ci: false,
+            only_review_requested: false,
         }
     }
 }
@@ -171,11 +189,45 @@ fn open_in_browser(url: &str) {
     let _ = cmd.spawn();
 }
 
+fn matches_filter(pr: &UiPr, query: &str) -> bool {
+    if query.trim().is_empty() {
+        return true;
+    }
+    let q = query.trim().to_lowercase();
+    let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo).to_lowercase();
+    let author = pr.pr.author.to_lowercase();
+    let title = pr.pr.title.to_lowercase();
+    let num = format!("#{}", pr.pr.number);
+    repo.contains(&q) || author.contains(&q) || title.contains(&q) || num.contains(query.trim())
+}
+
+fn filtered_indices(state_prs: &[UiPr], query: &str, only_needs_you: bool, only_failing_ci: bool, only_review_requested: bool) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (idx, pr) in state_prs.iter().enumerate() {
+        if only_needs_you && pr.category != Category::NeedsYou {
+            continue;
+        }
+        if only_failing_ci && !matches!(pr.pr.ci_state, crate::model::CiState::Failure) {
+            continue;
+        }
+        if only_review_requested && !matches!(pr.pr.review_state, crate::model::ReviewState::Requested) {
+            continue;
+        }
+        if !matches_filter(pr, query) {
+            continue;
+        }
+        out.push(idx);
+    }
+    out
+}
+
 fn build_list_lines(
     prs: &[UiPr],
     inner_width: u16,
     inner_height: u16,
     selected_visible_idx: usize,
+    filtered: &[usize],
+    filter_banner: Option<&str>,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     // We build rendered lines (headers/dividers/rows/blanks) up to inner_height.
     // Also track which `prs` indices are visible, in order, so selection works.
@@ -188,35 +240,52 @@ fn build_list_lines(
         }
     }
 
+    // Optional filter banner at the top.
+    if let Some(banner) = filter_banner {
+        push_line(
+            &mut lines,
+            inner_height,
+            Line::from(Span::styled(
+                truncate_ellipsis(banner, inner_width as usize),
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            )),
+        );
+        push_line(&mut lines, inner_height, Line::from(Span::raw("")));
+    }
+
     // Table-ish column sizing (dynamic; only truncates when the terminal width forces it).
     // Columns: prefix(2) repo(var) author(var) #num(var) title(var) status(var)
     let iw = inner_width as usize;
     let prefix_w = 2usize;
     let sep_w = 2usize; // two spaces between columns
 
-    let max_repo_len = prs
+    let max_repo_len = filtered
         .iter()
+        .filter_map(|&i| prs.get(i))
         .map(|p| {
             let s = format!("{}/{}", p.pr.owner, p.pr.repo);
             UnicodeWidthStr::width(s.as_str())
         })
         .max()
         .unwrap_or(10);
-    let max_author_len = prs
+    let max_author_len = filtered
         .iter()
+        .filter_map(|&i| prs.get(i))
         .map(|p| UnicodeWidthStr::width(p.pr.author.as_str()))
         .max()
         .unwrap_or(6);
-    let max_num_len = prs
+    let max_num_len = filtered
         .iter()
+        .filter_map(|&i| prs.get(i))
         .map(|p| {
             let s = format!("#{}", p.pr.number);
             UnicodeWidthStr::width(s.as_str())
         })
         .max()
         .unwrap_or(4);
-    let max_status_len = prs
+    let max_status_len = filtered
         .iter()
+        .filter_map(|&i| prs.get(i))
         .map(|p| UnicodeWidthStr::width(p.display_status.as_str()))
         .max()
         .unwrap_or(10);
@@ -249,7 +318,11 @@ fn build_list_lines(
     let cats = [Category::NeedsYou, Category::Waiting, Category::Stale];
     for cat in cats {
         // Skip empty sections entirely.
-        if !prs.iter().any(|p| p.category == cat) {
+        if !filtered
+            .iter()
+            .filter_map(|&i| prs.get(i))
+            .any(|p| p.category == cat)
+        {
             continue;
         }
 
@@ -283,10 +356,9 @@ fn build_list_lines(
         );
 
         // Rows in this category
-        for (idx, pr) in prs.iter().enumerate() {
-            if pr.category != cat {
-                continue;
-            }
+        for &idx in filtered {
+            let Some(pr) = prs.get(idx) else { continue };
+            if pr.category != cat { continue; }
             if (lines.len() as u16) >= inner_height {
                 break;
             }
@@ -360,7 +432,13 @@ fn build_list_lines(
     (lines, visible_pr_indices)
 }
 
-fn build_footer(inner_width: u16, mode: ViewMode, refreshing: bool, shimmer_phase: u8) -> Line<'static> {
+fn build_footer(
+    inner_width: u16,
+    mode: ViewMode,
+    refreshing: bool,
+    shimmer_phase: u8,
+    filter_mode: bool,
+) -> Line<'static> {
     #[derive(Clone)]
     struct Seg {
         text: String,
@@ -401,27 +479,41 @@ fn build_footer(inner_width: u16, mode: ViewMode, refreshing: bool, shimmer_phas
     let mut segs: Vec<Seg> = Vec::new();
     match mode {
         ViewMode::List => {
-            segs.extend([
-                keycap("q"), label("quit"), sep(),
-                keycap("r"),
-                if refreshing {
-                    Seg {
-                        text: format!("refreshing {}", shimmer(shimmer_phase)),
-                        style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                    }
-                } else {
-                    label("refresh")
-                },
-                sep(),
-                keycap("Enter"), label("open"), sep(),
-                keycap("Tab"), label("details"), sep(),
-                keycap("↑/↓"), label("move"),
-            ]);
+            if filter_mode {
+                segs.extend([
+                    keycap("Esc"), label("back"), sep(),
+                    keycap("Enter"), label("done"), sep(),
+                    keycap("Backspace"), label("delete"), sep(),
+                    keycap("Ctrl+n"), label("needs"), sep(),
+                    keycap("Ctrl+c"), label("failing"), sep(),
+                    keycap("Ctrl+v"), label("review"), sep(),
+                    keycap("Ctrl+x"), label("clear"),
+                ]);
+            } else {
+                segs.extend([
+                    keycap("q"), label("quit"), sep(),
+                    keycap("r"),
+                    if refreshing {
+                        Seg {
+                            text: format!("refreshing {}", shimmer(shimmer_phase)),
+                            style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        }
+                    } else {
+                        label("refresh")
+                    },
+                    sep(),
+                    keycap("/"), label("filter"), sep(),
+                    keycap("Enter"), label("open"), sep(),
+                    keycap("Tab"), label("details"), sep(),
+                    keycap("↑/↓"), label("move"),
+                ]);
+            }
         }
         ViewMode::Details => {
             segs.extend([
                 keycap("Tab"), label("back"), sep(),
                 keycap("Enter"), label("open check"), sep(),
+                keycap("f"), label("open failing"), sep(),
                 keycap("r"),
                 if refreshing {
                     Seg {
@@ -439,20 +531,69 @@ fn build_footer(inner_width: u16, mode: ViewMode, refreshing: bool, shimmer_phas
         }
     }
 
+    let iw = inner_width as usize;
+
+    // Keep keycap colors even in narrow terminals by dropping low-priority segments
+    // instead of falling back to a plain hint line.
     let total_w: usize = segs
         .iter()
         .map(|s| UnicodeWidthStr::width(s.text.as_str()))
         .sum();
-    let iw = inner_width as usize;
-
-    // If it doesn't fit, fall back to a plain truncated hint.
     if total_w > iw {
-        let hint = match mode {
-            ViewMode::List => "[q] quit  [r] refresh  [Enter] open  [Tab] details  [↑/↓] move",
-            ViewMode::Details => "[Tab] back  [Enter] open  [r] refresh  [q] quit",
+        let mut essential: Vec<Seg> = match mode {
+            ViewMode::List => vec![
+                keycap("q"), label("quit"), sep(),
+                keycap("r"),
+                if refreshing {
+                    Seg {
+                        text: format!("refreshing {}", shimmer(shimmer_phase)),
+                        style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    }
+                } else {
+                    label("refresh")
+                },
+                sep(),
+                keycap("/"), label("filter"),
+                sep(),
+                keycap("Enter"), label("open"), sep(),
+                keycap("Tab"), label("details"), sep(),
+                keycap("↑/↓"), label("move"),
+            ],
+            ViewMode::Details => vec![
+                keycap("Tab"), label("back"), sep(),
+                keycap("Enter"), label("open"), sep(),
+                keycap("r"),
+                if refreshing {
+                    Seg {
+                        text: format!("refreshing {}", shimmer(shimmer_phase)),
+                        style: Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    }
+                } else {
+                    label("refresh")
+                },
+                sep(),
+                keycap("q"), label("quit"),
+            ],
         };
-        let s = truncate_ellipsis(hint, iw);
-        return Line::from(Span::styled(s, Style::default().fg(Color::Gray)));
+
+        // Add optional segments only if they fit.
+        let mut optional: Vec<Seg> = match mode {
+            ViewMode::List => Vec::new(),
+            ViewMode::Details => vec![sep(), keycap("f"), label("failing"), sep(), keycap("↑/↓"), label("select")],
+        };
+
+        let mut cur_w: usize = essential.iter().map(|s| UnicodeWidthStr::width(s.text.as_str())).sum();
+        while !optional.is_empty() {
+            let next = optional.remove(0);
+            let next_w = UnicodeWidthStr::width(next.text.as_str());
+            if cur_w + next_w > iw {
+                break;
+            }
+            cur_w += next_w;
+            essential.push(next);
+        }
+
+        segs = essential;
     }
 
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -486,6 +627,9 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
         ("Updated", human_age(now, pr.pr.updated_at_unix)),
         ("URL", pr.pr.url.clone()),
         ("Commit", pr.pr.last_commit_sha.clone().unwrap_or_else(|| "none".to_string())),
+        ("Draft", if pr.pr.is_draft { "yes".to_string() } else { "no".to_string() }),
+        ("Mergeable", pr.pr.mergeable.clone().unwrap_or_else(|| "unknown".to_string())),
+        ("MergeState", pr.pr.merge_state_status.clone().unwrap_or_else(|| "unknown".to_string())),
         (
             "Opened",
             pr.last_opened_at
@@ -533,6 +677,25 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
             )));
         }
     } else {
+        let mut n_fail = 0usize;
+        let mut n_run = 0usize;
+        let mut n_ok = 0usize;
+        let mut n_other = 0usize;
+        for c in &pr.pr.ci_checks {
+            match c.state {
+                crate::model::CiCheckState::Failure => n_fail += 1,
+                crate::model::CiCheckState::Running => n_run += 1,
+                crate::model::CiCheckState::Success => n_ok += 1,
+                _ => n_other += 1,
+            }
+        }
+        if (out.len() as u16) < inner_height {
+            out.push(Line::from(Span::styled(
+                format!("Summary: {n_fail} failed, {n_run} running, {n_ok} ok, {n_other} other"),
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            )));
+        }
+
         let mut failed: Vec<String> = pr
             .pr
             .ci_checks
@@ -581,7 +744,7 @@ fn build_details_lines(pr: &UiPr, inner_width: u16, inner_height: u16, ci_select
         }
         if (out.len() as u16) < inner_height {
             out.push(Line::from(Span::styled(
-                "Enter: open selected check".to_string(),
+                "Enter: open selected check   f: open first failing check".to_string(),
                 Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
             )));
         }
@@ -603,6 +766,7 @@ pub fn run_tui(
     mut state: AppState,
     refresh_fn: Arc<dyn Fn() -> Result<Vec<UiPr>, String> + Send + Sync>,
     start_refresh_immediately: bool,
+    bell_enabled: bool,
 ) -> Result<(), String> {
     if !io::stdin().is_tty() || !io::stdout().is_tty() {
         return Err("Not a TTY: run `needle` in an interactive terminal.".to_string());
@@ -656,6 +820,22 @@ pub fn run_tui(
             if let Some(rx) = &refresh_rx {
                 match rx.try_recv() {
                     Ok(Ok(new_prs)) => {
+                        if bell_enabled {
+                            let old_needs: HashSet<String> = state
+                                .prs
+                                .iter()
+                                .filter(|p| p.category == Category::NeedsYou)
+                                .map(|p| p.pr.pr_key.clone())
+                                .collect();
+                            let entered_needs_you = new_prs
+                                .iter()
+                                .any(|p| p.category == Category::NeedsYou && !old_needs.contains(&p.pr.pr_key));
+                            let new_ci_failure = new_prs.iter().any(|p| p.is_new_ci_failure);
+                            let _new_review_request = new_prs.iter().any(|p| p.is_new_review_request);
+                            if entered_needs_you || new_ci_failure {
+                                let _ = execute!(terminal.backend_mut(), Print("\x07"));
+                            }
+                        }
                         state.prs = new_prs;
                         state.refreshing = false;
                         refresh_rx = None;
@@ -682,7 +862,32 @@ pub fn run_tui(
         let content_height = inner_height.saturating_sub(1); // footer rendered separately at bottom
 
         let (lines, visible) = if state.mode == ViewMode::List {
-            let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx);
+            let filtered = filtered_indices(
+                &state.prs,
+                &state.filter_query,
+                state.only_needs_you,
+                state.only_failing_ci,
+                state.only_review_requested,
+            );
+            let mut banner = String::new();
+            if state.filter_editing {
+                banner = format!("Filter: {} (Esc back)", state.filter_edit);
+            } else if !state.filter_query.is_empty()
+                || state.only_needs_you
+                || state.only_failing_ci
+                || state.only_review_requested
+            {
+                let mut parts: Vec<String> = Vec::new();
+                if !state.filter_query.is_empty() {
+                    parts.push(format!("q=\"{}\"", state.filter_query));
+                }
+                if state.only_needs_you { parts.push("needs".to_string()); }
+                if state.only_failing_ci { parts.push("failing".to_string()); }
+                if state.only_review_requested { parts.push("review".to_string()); }
+                banner = format!("Filter: {}", parts.join("  "));
+            }
+            let banner_opt = if banner.is_empty() { None } else { Some(banner.as_str()) };
+            let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx, &filtered, banner_opt);
             (l, v)
         } else {
             let key = state.details_pr_key.clone();
@@ -691,11 +896,24 @@ pub fn run_tui(
                 (build_details_lines(&pr, inner_width, content_height, state.details_ci_selected), Vec::new())
             } else {
                 state.mode = ViewMode::List;
-                let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx);
+                let filtered = filtered_indices(
+                    &state.prs,
+                    &state.filter_query,
+                    state.only_needs_you,
+                    state.only_failing_ci,
+                    state.only_review_requested,
+                );
+                let (l, v) = build_list_lines(&state.prs, inner_width, content_height, state.selected_idx, &filtered, None);
                 (l, v)
             }
         };
-        let footer_line = build_footer(inner_width, state.mode, state.refreshing, state.shimmer_phase);
+        let footer_line = build_footer(
+            inner_width,
+            state.mode,
+            state.refreshing,
+            state.shimmer_phase,
+            state.mode == ViewMode::List && state.filter_editing,
+        );
         let visible_for_events = visible;
         if state.mode == ViewMode::List {
             clamp_selection(&mut state.selected_idx, visible_for_events.len());
@@ -728,6 +946,68 @@ pub fn run_tui(
                 if k.kind != KeyEventKind::Press {
                     continue;
                 }
+                if state.filter_editing {
+                    match (k.code, k.modifiers) {
+                        (KeyCode::Up, _) => {
+                            if state.mode == ViewMode::List && state.selected_idx > 0 {
+                                state.selected_idx -= 1;
+                            }
+                        }
+                        (KeyCode::Down, _) => {
+                            if state.mode == ViewMode::List && state.selected_idx + 1 < visible_for_events.len() {
+                                state.selected_idx += 1;
+                            }
+                        }
+                        (KeyCode::Esc, _) => {
+                            // Exit filter mode and clear the filter text (back to unfiltered list).
+                            state.filter_prev_query.clear();
+                            state.filter_edit.clear();
+                            state.filter_query.clear();
+                            state.filter_editing = false;
+                            state.selected_idx = 0;
+                        }
+                        (KeyCode::Backspace, _) => {
+                            state.filter_edit.pop();
+                            state.filter_query = state.filter_edit.clone();
+                        }
+                        (KeyCode::Enter, _) => {
+                            // Live filtering already applied; Enter just exits filter mode.
+                            state.filter_editing = false;
+                            state.filter_edit.clear();
+                            state.selected_idx = 0;
+                        }
+                        (KeyCode::Char('x'), m) if m.contains(KeyModifiers::CONTROL) => {
+                            state.filter_prev_query.clear();
+                            state.filter_edit.clear();
+                            state.filter_query.clear();
+                            state.only_needs_you = false;
+                            state.only_failing_ci = false;
+                            state.only_review_requested = false;
+                            state.selected_idx = 0;
+                        }
+                        (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => {
+                            state.only_needs_you = !state.only_needs_you;
+                            state.selected_idx = 0;
+                        }
+                        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
+                            state.only_failing_ci = !state.only_failing_ci;
+                            state.selected_idx = 0;
+                        }
+                        (KeyCode::Char('v'), m) if m.contains(KeyModifiers::CONTROL) => {
+                            state.only_review_requested = !state.only_review_requested;
+                            state.selected_idx = 0;
+                        }
+                        (KeyCode::Char(ch), _) => {
+                            if !ch.is_control() {
+                                state.filter_edit.push(ch);
+                                state.filter_query = state.filter_edit.clone();
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 match k.code {
                     KeyCode::Char('q') => break,
                     KeyCode::Char('r') => {
@@ -743,6 +1023,62 @@ pub fn run_tui(
                                 let res = rf();
                                 let _ = tx.send(res);
                             });
+                        }
+                    }
+                    KeyCode::Char('f') => {
+                        if state.mode == ViewMode::Details {
+                            let pr_opt = state
+                                .details_pr_key
+                                .as_ref()
+                                .and_then(|k| state.prs.iter_mut().find(|p| &p.pr.pr_key == k));
+                            if let Some(pr) = pr_opt {
+                                let url = pr
+                                    .pr
+                                    .ci_checks
+                                    .iter()
+                                    .find(|c| c.state.is_failure())
+                                    .and_then(|c| c.url.as_deref())
+                                    .unwrap_or(pr.pr.url.as_str());
+                                open_in_browser(url);
+                                let ts = now_unix();
+                                pr.last_opened_at = Some(ts);
+                                let _ = set_last_opened_at(conn, &pr.pr.pr_key, ts);
+                            }
+                        }
+                    }
+                    KeyCode::Char('/') => {
+                        if state.mode == ViewMode::List && !state.filter_editing {
+                            state.filter_editing = true;
+                            state.filter_prev_query = state.filter_query.clone();
+                            state.filter_edit = state.filter_query.clone();
+                            state.selected_idx = 0;
+                        }
+                    }
+                    KeyCode::Char('x') => {
+                        if state.mode == ViewMode::List && !state.filter_editing {
+                            state.filter_query.clear();
+                            state.only_needs_you = false;
+                            state.only_failing_ci = false;
+                            state.only_review_requested = false;
+                            state.selected_idx = 0;
+                        }
+                    }
+                    KeyCode::Char('n') => {
+                        if state.mode == ViewMode::List && !state.filter_editing {
+                            state.only_needs_you = !state.only_needs_you;
+                            state.selected_idx = 0;
+                        }
+                    }
+                    KeyCode::Char('c') => {
+                        if state.mode == ViewMode::List && !state.filter_editing {
+                            state.only_failing_ci = !state.only_failing_ci;
+                            state.selected_idx = 0;
+                        }
+                    }
+                    KeyCode::Char('v') => {
+                        if state.mode == ViewMode::List && !state.filter_editing {
+                            state.only_review_requested = !state.only_review_requested;
+                            state.selected_idx = 0;
                         }
                     }
                     KeyCode::Tab => {

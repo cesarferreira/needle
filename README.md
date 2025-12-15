@@ -46,6 +46,11 @@ needle
 
 - `--days <N>`: only include PRs updated in the last `N` days (default: `30`)
 - `--demo`: run with diverse fake data
+- `--org <ORG>`: only show PRs in these orgs/users (repeatable or comma-delimited)
+- `--include <owner/repo>`: only show these repos (repeatable or comma-delimited)
+- `--exclude <owner/repo>`: hide these repos (repeatable or comma-delimited)
+- `--include-team-requests`: include PRs requested to teams you are in (default: user-only)
+- `--bell`: ring terminal bell when a PR enters **NEEDS YOU** or when CI fails (new)
 
 ```bash
 needle --days 7
@@ -77,7 +82,7 @@ Add it to your bashrc/zshrc for future usage.
 Included PRs:
 - PRs **authored by you**
 - PRs where **you are explicitly requested as a reviewer (User)**  
-  (team review requests are ignored)
+  (team review requests are ignored unless `--include-team-requests`)
 
 For each PR it computes:
 - Latest commit SHA
@@ -91,12 +96,19 @@ List view:
 - `↑ / ↓`: move selection
 - `Enter`: open selected PR in default browser (persists `last_opened_at`)
 - `Tab`: open details view
+- `/`: filter mode (type to filter by repo/title/author/#)
+  - `Esc`: exit filter mode + clear filter text
+  - `Ctrl+n`: toggle “only NEEDS YOU”
+  - `Ctrl+c`: toggle “only failing CI”
+  - `Ctrl+v`: toggle “only review requested”
+  - `Ctrl+x`: clear all filters
 - `r`: refresh now (shows shimmer while refreshing)
 - `q`: quit
 
 Details view:
 - `↑ / ↓`: select CI check
 - `Enter`: open selected CI check page (falls back to PR URL)
+- `f`: open first failing CI check (falls back to PR URL)
 - `Tab`: back to list
 - `r`: refresh now
 - `q`: quit
@@ -133,7 +145,7 @@ Each PR gets a score (higher = more urgent):
 +40  CI failed AND state changed since last_seen
 +20  CI running longer than 10 minutes
 +15  approved but unmerged for >24h
--20  waiting on others (no review requested, CI green)
+-20  waiting on others (no review requested, CI green, not approved)
 -30  CI failed but unchanged since last_seen
 ```
 
