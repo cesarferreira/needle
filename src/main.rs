@@ -123,11 +123,10 @@ async fn main() {
         return;
     }
 
-    if std::env::var("GITHUB_TOKEN").is_err() {
+    let token = std::env::var("GITHUB_TOKEN").unwrap_or_else(|_| {
         eprintln!("Missing GITHUB_TOKEN env var");
         std::process::exit(1);
-    }
-    let token = std::env::var("GITHUB_TOKEN").unwrap();
+    });
 
     let octo = Octocrab::builder()
         .personal_token(token)
