@@ -33,10 +33,12 @@ Demo mode (no GitHub token required):
 needle --demo
 ```
 
-Real mode (requires `GITHUB_TOKEN`):
+Real mode (requires `NEEDLE_GITHUB_TOKEN` or `GITHUB_TOKEN`):
 
 ```bash
-export GITHUB_TOKEN=...
+export NEEDLE_GITHUB_TOKEN=ghp_...
+# or
+export GITHUB_TOKEN=ghp_...
 needle
 ```
 
@@ -62,7 +64,7 @@ needle --days 7
 ## Requirements
 
 - Rust (stable)
-- A GitHub Personal Access Token in `GITHUB_TOKEN`
+- A GitHub Personal Access Token in `NEEDLE_GITHUB_TOKEN` or `GITHUB_TOKEN`
 
 ## Get a GitHub token
 
@@ -75,8 +77,13 @@ Needle uses the GitHub API, so you’ll need a Personal Access Token.
 5. Copy the token and export it:
 
 ```bash
+export NEEDLE_GITHUB_TOKEN="ghp_..."
+# or
 export GITHUB_TOKEN="ghp_..."
 ```
+
+> [!NOTE]
+> If both are set, `NEEDLE_GITHUB_TOKEN` takes priority.
 
 Add it to your bashrc/zshrc for future usage.
 
