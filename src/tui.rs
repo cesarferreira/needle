@@ -1389,6 +1389,19 @@ pub fn run_tui(
                             .cloned()
                             .collect();
 
+                        // Detect new draft PRs.
+                        let old_pr_keys: HashSet<String> = state
+                            .prs
+                            .iter()
+                            .map(|p| p.pr.pr_key.clone())
+                            .collect();
+                        let prs_new_draft: Vec<&UiPr> = new_prs
+                            .iter()
+                            .filter(|p| {
+                                p.pr.is_draft && !old_pr_keys.contains(&p.pr.pr_key)
+                            })
+                            .collect();
+
                         // Bell alert (terminal bell).
                         if bell_enabled
                             && (!prs_entered_needs_you.is_empty()
@@ -1421,6 +1434,11 @@ pub fn run_tui(
                             for pr in prs_became_ready_to_merge.iter().take(3) {
                                 let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
                                 crate::notify::notify_ready_to_merge(&pr.pr.title, &repo);
+                            }
+                            // Notify for new draft PRs (up to 3).
+                            for pr in prs_new_draft.iter().take(3) {
+                                let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
+                                crate::notify::notify_new_draft(&pr.pr.title, &repo);
                             }
                         }
 

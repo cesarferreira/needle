@@ -62,9 +62,9 @@ struct CliArgs {
     #[arg(long)]
     bell: bool,
 
-    /// Show OS desktop notifications on important new events.
+    /// Disable OS desktop notifications on important new events.
     #[arg(long)]
-    notify: bool,
+    no_notifications: bool,
 
     /// Hide PR numbers column in list view.
     #[arg(long)]
@@ -121,7 +121,7 @@ async fn main() {
                 refresh_demo(&c, days, &scope_for_refresh)
             });
 
-        if let Err(e) = run_tui(&conn, state, refresh_fn, false, args.bell, args.notify, true) {
+        if let Err(e) = run_tui(&conn, state, refresh_fn, false, args.bell, !args.no_notifications, true) {
             eprintln!("{e}");
             std::process::exit(1);
         }
@@ -198,7 +198,7 @@ async fn main() {
             }
         });
 
-    if let Err(e) = run_tui(&conn, state, refresh_fn, true, args.bell, args.notify, false) {
+    if let Err(e) = run_tui(&conn, state, refresh_fn, true, args.bell, !args.no_notifications, false) {
         eprintln!("{e}");
         std::process::exit(1);
     }

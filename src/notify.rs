@@ -10,9 +10,8 @@ use notify_rust::Notification;
 /// Send a notification for a new CI failure.
 pub fn notify_ci_failure(pr_title: &str, repo: &str) {
     let _ = Notification::new()
-        .summary("CI Failed")
+        .summary("❌ CI Failed")
         .body(&format!("{}\n{}", repo, truncate(pr_title, 50)))
-        .icon("dialog-error")
         .timeout(5000)
         .show();
 }
@@ -20,9 +19,8 @@ pub fn notify_ci_failure(pr_title: &str, repo: &str) {
 /// Send a notification for a new review request.
 pub fn notify_review_requested(pr_title: &str, repo: &str) {
     let _ = Notification::new()
-        .summary("Review Requested")
+        .summary("👀 Review Requested")
         .body(&format!("{}\n{}", repo, truncate(pr_title, 50)))
-        .icon("dialog-information")
         .timeout(5000)
         .show();
 }
@@ -30,9 +28,8 @@ pub fn notify_review_requested(pr_title: &str, repo: &str) {
 /// Send a notification when a new repo appears in the PR list.
 pub fn notify_new_repo(repo_name: &str) {
     let _ = Notification::new()
-        .summary("New Repository")
+        .summary("📁 New Repository")
         .body(&format!("PRs from {} now visible", repo_name))
-        .icon("folder-new")
         .timeout(5000)
         .show();
 }
@@ -45,9 +42,8 @@ pub fn notify_needs_you(count: usize) {
         format!("{} PRs need your attention", count)
     };
     let _ = Notification::new()
-        .summary("Needle: Action Required")
+        .summary("⚠️ Needle: Action Required")
         .body(&body)
-        .icon("dialog-warning")
         .timeout(5000)
         .show();
 }
@@ -55,9 +51,17 @@ pub fn notify_needs_you(count: usize) {
 /// Send a notification when a PR becomes ready to merge.
 pub fn notify_ready_to_merge(pr_title: &str, repo: &str) {
     let _ = Notification::new()
-        .summary("Ready to Merge")
+        .summary("✅ Ready to Merge")
         .body(&format!("{}\n{}", repo, truncate(pr_title, 50)))
-        .icon("emblem-default")
+        .timeout(5000)
+        .show();
+}
+
+/// Send a notification when a new draft PR appears.
+pub fn notify_new_draft(pr_title: &str, repo: &str) {
+    let _ = Notification::new()
+        .summary("📝 New Draft PR")
+        .body(&format!("{}\n{}", repo, truncate(pr_title, 50)))
         .timeout(5000)
         .show();
 }
@@ -101,13 +105,14 @@ pub fn notify_random_demo() {
 
     let repo = demo_repos[counter % demo_repos.len()];
     let title = demo_titles[counter % demo_titles.len()];
-    let notification_type = counter % 5;
+    let notification_type = counter % 6;
 
     match notification_type {
         0 => notify_ci_failure(title, repo),
         1 => notify_review_requested(title, repo),
         2 => notify_new_repo(repo),
         3 => notify_ready_to_merge(title, repo),
+        4 => notify_new_draft(title, repo),
         _ => notify_needs_you((counter % 3) + 1),
     }
 }
