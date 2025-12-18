@@ -290,7 +290,7 @@ fn status_text(pr: &Pr, now: i64, is_new_ci_failure: bool, is_new_review_request
     }
 
     if is_ready_to_merge(pr) {
-        return format!("✅ ready to merge {}", human_age(now, pr.updated_at_unix));
+        return format!("✅ ready to merge ({})", human_age(now, pr.updated_at_unix));
     }
 
     match pr.ci_state {
@@ -305,8 +305,8 @@ fn status_text(pr: &Pr, now: i64, is_new_ci_failure: bool, is_new_review_request
             let mins = running_for_secs(pr, now) / 60;
             format!("🟡 CI running ({}m)", mins)
         }
-        CiState::Success => format!("✅ green {}", human_age(now, pr.updated_at_unix)),
-        CiState::None => format!("⏺ none {}", human_age(now, pr.updated_at_unix)),
+        CiState::Success => format!("✅ green ({})", human_age(now, pr.updated_at_unix)),
+        CiState::None => format!("⏺ none ({})", human_age(now, pr.updated_at_unix)),
     }
 }
 
