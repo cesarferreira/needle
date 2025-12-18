@@ -128,7 +128,9 @@ In details view you get a list of CI steps (check runs / status contexts):
 
 - Fetches on startup **in the background** (UI shows cached data immediately).
 - Manual refresh: `r`
-- Auto refresh: every **30s** while on the details view
+- Auto refresh in list view: every **3 minutes**
+- Auto refresh in details view: every **30s**
+- Manual refresh resets the auto-refresh timer.
 - No background async tasks beyond the single refresh worker thread.
 
 ## Scoring

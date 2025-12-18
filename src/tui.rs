@@ -62,6 +62,7 @@ pub struct AppState {
     pub(crate) shimmer_phase: u8,
     pub(crate) details_ci_selected: usize,
     pub(crate) details_last_auto_refresh: Option<Instant>,
+    pub(crate) last_refresh_started: Option<Instant>,
     pub(crate) ui: UiPrefs,
     pub(crate) help_open: bool,
 
@@ -87,6 +88,7 @@ impl AppState {
             shimmer_phase: 0,
             details_ci_selected: 0,
             details_last_auto_refresh: None,
+            last_refresh_started: Some(Instant::now()),
             ui,
             help_open: false,
             filter_query: String::new(),
@@ -1244,6 +1246,7 @@ pub fn run_tui(
     if start_refresh_immediately && !state.refreshing {
         state.refreshing = true;
         state.shimmer_phase = 0;
+        state.last_refresh_started = Some(Instant::now());
         let (tx, rx) = mpsc::channel();
         refresh_rx = Some(rx);
         let rf = Arc::clone(&refresh_fn);
@@ -1268,6 +1271,26 @@ pub fn run_tui(
             }
         }
 
+        // Auto refresh in list view every 3 minutes (non-blocking).
+        if state.mode == ViewMode::List && !state.refreshing {
+            let should = state
+                .last_refresh_started
+                .map(|t| t.elapsed() >= Duration::from_secs(60 * 3))
+                .unwrap_or(true);
+            if should {
+                state.last_refresh_started = Some(Instant::now());
+                state.refreshing = true;
+                state.shimmer_phase = 0;
+                let (tx, rx) = mpsc::channel();
+                refresh_rx = Some(rx);
+                let rf = Arc::clone(&refresh_fn);
+                std::thread::spawn(move || {
+                    let res = rf();
+                    let _ = tx.send(res);
+                });
+            }
+        }
+
         // Auto refresh in details view every 30s (non-blocking).
         if state.mode == ViewMode::Details && !state.refreshing {
             let should = state
@@ -1276,6 +1299,7 @@ pub fn run_tui(
                 .unwrap_or(true);
             if should {
                 state.details_last_auto_refresh = Some(Instant::now());
+                state.last_refresh_started = Some(Instant::now());
                 state.refreshing = true;
                 state.shimmer_phase = 0;
                 let (tx, rx) = mpsc::channel();
@@ -1611,6 +1635,7 @@ pub fn run_tui(
                         if !state.refreshing {
                             state.refreshing = true;
                             state.shimmer_phase = 0;
+                            state.last_refresh_started = Some(Instant::now());
                             let (tx, rx) = mpsc::channel();
                             refresh_rx = Some(rx);
                             // Run the refresh off-thread so we can animate shimmer + keep quit responsive.
