@@ -1,4 +1,4 @@
-use crate::model::{CiCheck, CiCheckState, CiState, Pr, ReviewState};
+use crate::model::{CiCheck, CiCheckState, CiState, MergeBlockers, Pr, ReviewState};
 use crate::timeutil::{parse_github_datetime_to_unix, unix_to_ymd};
 use octocrab::Octocrab;
 use std::collections::HashMap;
@@ -103,6 +103,26 @@ struct Commits {
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct ReviewsConnection {
+    #[serde(rename = "totalCount")]
+    total_count: Option<i32>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BranchProtectionRule {
+    #[serde(rename = "requiredApprovingReviewCount")]
+    required_approving_review_count: Option<i32>,
+    #[serde(rename = "requiredStatusCheckContexts")]
+    required_status_check_contexts: Option<Vec<String>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BaseRef {
+    #[serde(rename = "branchProtectionRule")]
+    branch_protection_rule: Option<BranchProtectionRule>,
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct PullRequestNode {
     number: i64,
     title: String,
@@ -123,6 +143,9 @@ struct PullRequestNode {
     #[serde(rename = "mergeStateStatus")]
     merge_state_status: Option<String>,
     commits: Option<Commits>,
+    reviews: Option<ReviewsConnection>,
+    #[serde(rename = "baseRef")]
+    base_ref: Option<BaseRef>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -179,6 +202,9 @@ struct SearchNode {
     #[serde(rename = "mergeStateStatus")]
     merge_state_status: Option<String>,
     commits: Option<Commits>,
+    reviews: Option<ReviewsConnection>,
+    #[serde(rename = "baseRef")]
+    base_ref: Option<BaseRef>,
 }
 
 impl SearchNode {
@@ -200,6 +226,8 @@ impl SearchNode {
             mergeable: self.mergeable,
             merge_state_status: self.merge_state_status,
             commits: self.commits,
+            reviews: self.reviews,
+            base_ref: self.base_ref,
         })
     }
 }
@@ -234,6 +262,15 @@ query($page_size: Int!, $cursor: String) {
               ... on User { login }
               ... on Team { slug }
             }
+          }
+        }
+        reviews(states: [APPROVED], first: 50) {
+          totalCount
+        }
+        baseRef {
+          branchProtectionRule {
+            requiredApprovingReviewCount
+            requiredStatusCheckContexts
           }
         }
         commits(last: 1) {
@@ -292,6 +329,15 @@ query($page_size: Int!, $cursor: String, $search_query: String!) {
               ... on User { login }
               ... on Team { slug }
             }
+          }
+        }
+        reviews(states: [APPROVED], first: 50) {
+          totalCount
+        }
+        baseRef {
+          branchProtectionRule {
+            requiredApprovingReviewCount
+            requiredStatusCheckContexts
           }
         }
         commits(last: 1) {
@@ -479,13 +525,68 @@ fn is_review_requested_by_user(node: &PullRequestNode, viewer_login: &str) -> bo
     false
 }
 
+fn compute_merge_blockers(node: &PullRequestNode, ci_checks: &[CiCheck]) -> MergeBlockers {
+    let has_conflicts = node
+        .mergeable
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("CONFLICTING"));
+
+    let is_behind_base = node
+        .merge_state_status
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("BEHIND"));
+
+    // Get branch protection info
+    let (required_approvals, required_checks) = node
+        .base_ref
+        .as_ref()
+        .and_then(|br| br.branch_protection_rule.as_ref())
+        .map(|bpr| {
+            let approvals = bpr.required_approving_review_count.map(|c| c as u32);
+            let checks = bpr
+                .required_status_check_contexts
+                .clone()
+                .unwrap_or_default();
+            (approvals, checks)
+        })
+        .unwrap_or((None, Vec::new()));
+
+    let current_approvals = node
+        .reviews
+        .as_ref()
+        .and_then(|r| r.total_count)
+        .unwrap_or(0) as u32;
+
+    // Find failing required checks
+    let check_names_success: std::collections::HashSet<_> = ci_checks
+        .iter()
+        .filter(|c| matches!(c.state, CiCheckState::Success))
+        .map(|c| c.name.as_str())
+        .collect();
+
+    let failing_required_checks: Vec<String> = required_checks
+        .iter()
+        .filter(|name| !check_names_success.contains(name.as_str()))
+        .cloned()
+        .collect();
+
+    MergeBlockers {
+        has_conflicts,
+        required_approvals,
+        current_approvals,
+        required_checks,
+        failing_required_checks,
+        is_behind_base,
+    }
+}
+
 fn to_pr(node: PullRequestNode, is_requested: bool, viewer_login: &str) -> Option<Pr> {
     let ci_checks = map_ci_checks(&node);
     let ci_state = derive_ci_state(rollup_state(&node), &ci_checks);
     let last_commit_sha = node.head_ref_oid.clone();
     let review_state = map_review_state(&node, is_requested);
-    let owner = node.repository.owner.login;
-    let repo = node.repository.name;
+    let owner = node.repository.owner.login.clone();
+    let repo = node.repository.name.clone();
     let author = node
         .author
         .as_ref()
@@ -499,6 +600,13 @@ fn to_pr(node: PullRequestNode, is_requested: bool, viewer_login: &str) -> Optio
         .as_ref()
         .map(|a| a.login.as_str() == viewer_login)
         .unwrap_or(false);
+
+    let merge_blockers = compute_merge_blockers(&node, &ci_checks);
+    let merge_blockers = if merge_blockers.is_clear() {
+        None
+    } else {
+        Some(merge_blockers)
+    };
 
     Some(Pr {
         pr_key,
@@ -517,6 +625,7 @@ fn to_pr(node: PullRequestNode, is_requested: bool, viewer_login: &str) -> Optio
         mergeable: node.mergeable.clone(),
         merge_state_status: node.merge_state_status.clone(),
         is_viewer_author,
+        merge_blockers,
     })
 }
 
@@ -589,6 +698,7 @@ mod tests {
             mergeable: None,
             merge_state_status: None,
             is_viewer_author: true,
+            merge_blockers: None,
         };
         let mut requested = authored.clone();
         requested.is_viewer_author = false;

@@ -1144,6 +1144,44 @@ fn build_details_lines(
         ]));
     }
 
+    // Merge blockers section
+    if let Some(blockers) = &pr.pr.merge_blockers {
+        if (out.len() as u16) < inner_height {
+            out.push(Line::from(Span::raw("")));
+        }
+        if (out.len() as u16) < inner_height {
+            out.push(Line::from(Span::styled(
+                "MERGE BLOCKERS".to_string(),
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+        if (out.len() as u16) < inner_height {
+            out.push(Line::from(Span::styled(
+                std::iter::repeat('─').take(iw).collect::<String>(),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+
+        for desc in blockers.to_descriptions() {
+            if (out.len() as u16) >= inner_height {
+                break;
+            }
+            let (icon, color) = if desc.starts_with("Merge conflicts") || desc.contains("failing") {
+                ("❌", Color::Red)
+            } else if desc.starts_with("Branch behind") || desc.contains("Approvals") {
+                ("⚠️", Color::Yellow)
+            } else {
+                ("•", Color::Gray)
+            };
+            out.push(Line::from(vec![
+                Span::styled(format!("  {} ", icon), Style::default().fg(color)),
+                Span::styled(desc, Style::default().fg(color)),
+            ]));
+        }
+    }
+
     // CI checks list
     if (out.len() as u16) < inner_height {
         out.push(Line::from(Span::raw("")));
