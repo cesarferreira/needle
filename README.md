@@ -50,7 +50,7 @@ needle
 - `--include <owner/repo>`: only show these repos (repeatable or comma-delimited)
 - `--exclude <owner/repo>`: hide these repos (repeatable or comma-delimited)
 - `--include-team-requests`: include PRs requested to teams you are in (default: user-only)
-- `--bell`: ring terminal bell when a PR enters **NEEDS YOU** or when CI fails (new)
+- `--bell`: ring terminal bell when a PR enters **NEEDS YOU** or when CI fails
 - `--no-notifications`: disable desktop notifications (enabled by default)
 - `--hide-pr-numbers`: hide PR numbers column
 - `--hide-repo`: hide repository column
@@ -61,6 +61,34 @@ needle
 ```bash
 needle --days 7
 ```
+
+## Configuration File
+
+Needle automatically creates a config file at `~/.config/needle/config.toml` on first run. All CLI options can be set as defaults in this file:
+
+```toml
+# Only include PRs updated in the last N days
+days = 14
+
+# Only show PRs from these orgs/users
+org = ["my-company", "my-username"]
+
+# Exclude noisy repos
+exclude = ["my-company/legacy-repo"]
+
+# Ring terminal bell on important events
+bell = true
+
+# Auto-refresh intervals (seconds)
+refresh_interval_list_secs = 120
+refresh_interval_details_secs = 15
+```
+
+CLI arguments always override config file values.
+
+## Pinned PRs
+
+Press `p` in list view to pin/unpin a PR. Pinned PRs appear in a dedicated **📌 PINNED** section at the top of the list, regardless of their score. Pin state persists across sessions.
 
 ## Desktop Notifications
 
@@ -121,11 +149,12 @@ List view:
 - `↑ / ↓`: move selection
 - `Enter`: open selected PR in default browser
 - `Tab`: open details view
+- `p`: pin/unpin selected PR
 - `/`: filter mode (type to filter by repo/title/author/#)
   - `Esc`: exit filter mode + clear filter text
-  - `Ctrl+n`: toggle “only NEEDS YOU”
-  - `Ctrl+c`: toggle “only failing CI”
-  - `Ctrl+v`: toggle “only review requested”
+  - `Ctrl+n`: toggle "only NEEDS YOU"
+  - `Ctrl+c`: toggle "only failing CI"
+  - `Ctrl+v`: toggle "only review requested"
   - `Ctrl+x`: clear all filters
 - `?`: help (explains what each section means)
 - `r`: refresh now (shows shimmer while refreshing)
