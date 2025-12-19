@@ -1,4 +1,4 @@
-use crate::model::{CiCheck, CiCheckState, CiState, Pr, ReviewState};
+use crate::model::{CiCheck, CiCheckState, CiState, MergeBlockers, Pr, ReviewState};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static DEMO_TICK: AtomicU64 = AtomicU64::new(0);
@@ -29,6 +29,8 @@ struct DemoPrSpec {
     ci: CiProfile,
     is_draft: bool,
     is_viewer_author: bool,
+    /// Optional merge blockers for demo purposes.
+    blockers: Option<MergeBlockers>,
 }
 
 fn fnv1a_64(s: &str) -> u64 {
@@ -147,6 +149,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::Green,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "you-inc",
@@ -159,6 +162,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::Green,
             is_draft: false,
             is_viewer_author: true,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "orbit",
@@ -171,6 +175,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::RedNew,
             is_draft: true,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "windmill-labs",
@@ -183,6 +188,15 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::RedStuck,
             is_draft: false,
             is_viewer_author: false,
+            // Demo: has merge conflicts
+            blockers: Some(MergeBlockers {
+                has_conflicts: true,
+                required_approvals: Some(2),
+                current_approvals: 0,
+                required_checks: vec!["build".to_string(), "test".to_string()],
+                failing_required_checks: vec!["test".to_string()],
+                is_behind_base: false,
+            }),
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -195,6 +209,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::RunningLong,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "acme-inc",
@@ -207,6 +222,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::RunningShort,
             is_draft: true,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "honeycombio",
@@ -219,6 +235,15 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::Green,
             is_draft: false,
             is_viewer_author: false,
+            // Demo: needs more approvals
+            blockers: Some(MergeBlockers {
+                has_conflicts: false,
+                required_approvals: Some(2),
+                current_approvals: 1,
+                required_checks: vec![],
+                failing_required_checks: vec![],
+                is_behind_base: true,
+            }),
         },
         DemoPrSpec {
             owner: "orbit",
@@ -231,6 +256,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::Green,
             is_draft: false,
             is_viewer_author: true,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -243,6 +269,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::NoCi,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "acme-inc",
@@ -255,6 +282,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::RunningLong,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "windmill-labs",
@@ -267,6 +295,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::Green,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "orbit",
@@ -279,6 +308,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::RedNew,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -291,6 +321,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::NoCi,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "honeycombio",
@@ -303,6 +334,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::Green,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "acme-inc",
@@ -315,6 +347,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::RedNew,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "windmill-labs",
@@ -327,6 +360,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::Green,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
         DemoPrSpec {
             owner: "paperplane",
@@ -339,6 +373,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
             ci: CiProfile::RunningLong,
             is_draft: false,
             is_viewer_author: false,
+            blockers: None,
         },
     ];
 
@@ -391,6 +426,7 @@ pub fn generate_demo_prs(now: i64, tick: u64) -> Vec<Pr> {
                 mergeable: Some("MERGEABLE".to_string()),
                 merge_state_status: Some("CLEAN".to_string()),
                 is_viewer_author: s.is_viewer_author,
+                merge_blockers: s.blockers.clone(),
             }
         })
         .collect()

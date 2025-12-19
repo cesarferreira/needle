@@ -119,6 +119,8 @@ pub fn load_cached(
             mergeable: row.mergeable.clone(),
             merge_state_status: row.merge_state_status.clone(),
             is_viewer_author: db_int_to_bool(row.author_is_viewer),
+            // Merge blockers are computed fresh from GraphQL, not cached
+            merge_blockers: None,
         };
         if !scope.matches(&pr) {
             continue;
@@ -520,6 +522,7 @@ mod tests {
             mergeable: None,
             merge_state_status: None,
             is_viewer_author: false,
+            merge_blockers: None,
         }
     }
 
