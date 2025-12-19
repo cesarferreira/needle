@@ -54,14 +54,67 @@ pub fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|p| p.join("needle").join("config.toml"))
 }
 
+/// Default config file content with all options documented.
+const DEFAULT_CONFIG: &str = r#"# Needle configuration file
+# All fields are optional - CLI arguments override these values
+# Uncomment and modify the options you want to customize
+
+# Only include PRs updated in the last N days (default: 30)
+# days = 30
+
+# Only show PRs from these orgs/users
+# org = ["my-company", "my-username"]
+
+# Only show these specific repos (owner/repo)
+# include = ["my-company/important-repo"]
+
+# Exclude these repos from the list (owner/repo)
+# exclude = ["my-company/noisy-repo", "my-company/legacy-repo"]
+
+# Include PRs where review is requested from teams you're in (default: false)
+# include_team_requests = false
+
+# Ring terminal bell on important events (default: false)
+# bell = false
+
+# Disable desktop notifications (default: false, i.e. notifications enabled)
+# no_notifications = false
+
+# Hide columns in list view
+# hide_pr_numbers = false
+# hide_repo = false
+# hide_author = false
+
+# Auto-refresh intervals in seconds
+# refresh_interval_list_secs = 180    # 3 minutes for list view
+# refresh_interval_details_secs = 30  # 30 seconds for details view
+"#;
+
+/// Create the default config file if it doesn't exist.
+fn create_default_config(path: &PathBuf) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {e}"))?;
+    }
+    std::fs::write(path, DEFAULT_CONFIG)
+        .map_err(|e| format!("Failed to write config file: {e}"))?;
+    eprintln!("Created default config file at {}", path.display());
+    Ok(())
+}
+
 /// Load configuration from the config file.
-/// Returns default config if the file doesn't exist or can't be parsed.
+/// Creates a default config file if it doesn't exist.
+/// Returns default config if the file can't be parsed.
 pub fn load_config() -> Config {
     let Some(path) = config_path() else {
         return Config::default();
     };
 
     if !path.exists() {
+        // Create default config file
+        if let Err(e) = create_default_config(&path) {
+            eprintln!("Warning: {e}");
+        }
         return Config::default();
     }
 
