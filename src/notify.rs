@@ -102,7 +102,7 @@ fn send_simple(title: &str, body: &str) {
 /// Send a notification for a new CI failure.
 pub fn notify_ci_failure(pr_title: &str, repo: &str, url: &str) {
     send_with_url(
-        "❌ CI Failed",
+        "🔴 CI Failed",
         repo,
         &truncate(pr_title, 50),
         url,
@@ -122,7 +122,7 @@ pub fn notify_review_requested(pr_title: &str, repo: &str, url: &str) {
 /// Send a notification when a new repo appears in the PR list.
 pub fn notify_new_repo(repo_name: &str) {
     send_simple(
-        "📁 New Repository",
+        "✨ New Repository",
         &format!("PRs from {} now visible", repo_name),
     );
 }
@@ -134,7 +134,7 @@ pub fn notify_needs_you(count: usize) {
     } else {
         format!("{} PRs need your attention", count)
     };
-    send_simple("⚠️ Needle: Action Required", &body);
+    send_simple("🔔 Action Required", &body);
 }
 
 /// Send a notification when a PR becomes ready to merge.
@@ -150,7 +150,7 @@ pub fn notify_ready_to_merge(pr_title: &str, repo: &str, url: &str) {
 /// Send a notification when a new draft PR appears.
 pub fn notify_new_draft(pr_title: &str, repo: &str, url: &str) {
     send_with_url(
-        "📝 New Draft PR",
+        "🏗️ New Draft PR",
         repo,
         &truncate(pr_title, 50),
         url,
