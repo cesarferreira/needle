@@ -1,3 +1,4 @@
+mod config;
 mod db;
 mod demo;
 mod github;
@@ -7,9 +8,10 @@ mod refresh;
 mod timeutil;
 mod tui;
 
+use crate::config::load_config;
 use crate::db::{db_path, delete_prs_not_in, open_db};
 use crate::refresh::{ScopeFilters, load_cached, refresh, refresh_demo};
-use crate::tui::{AppState, UiPrefs, run_tui};
+use crate::tui::{AppState, RefreshIntervals, UiPrefs, run_tui};
 use clap::{ArgAction, Parser};
 use octocrab::Octocrab;
 use std::sync::Arc;
@@ -82,16 +84,55 @@ struct CliArgs {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = CliArgs::parse();
-    let days = args.days;
-    let scope = ScopeFilters {
-        orgs: args.org.clone(),
-        include_repos: args.include.clone(),
-        exclude_repos: args.exclude.clone(),
+    let config = load_config();
+
+    // Merge config with CLI args (CLI takes precedence).
+    // For days, only use config if CLI is at default (30).
+    let days = if args.days != 30 {
+        args.days
+    } else {
+        config.days.unwrap_or(30)
     };
+
+    // For Vec fields, use CLI if non-empty, otherwise config.
+    let orgs = if !args.org.is_empty() {
+        args.org.clone()
+    } else {
+        config.org.unwrap_or_default()
+    };
+    let include_repos = if !args.include.is_empty() {
+        args.include.clone()
+    } else {
+        config.include.unwrap_or_default()
+    };
+    let exclude_repos = if !args.exclude.is_empty() {
+        args.exclude.clone()
+    } else {
+        config.exclude.unwrap_or_default()
+    };
+
+    let scope = ScopeFilters {
+        orgs,
+        include_repos,
+        exclude_repos,
+    };
+
+    // For boolean flags, CLI true overrides config; otherwise use config value.
+    let include_team_requests =
+        args.include_team_requests || config.include_team_requests.unwrap_or(false);
+    let bell_enabled = args.bell || config.bell.unwrap_or(false);
+    let notify_enabled =
+        !(args.no_notifications || config.no_notifications.unwrap_or(false));
+
     let ui = UiPrefs {
-        hide_pr_numbers: args.hide_pr_numbers,
-        hide_repo: args.hide_repo,
-        hide_author: args.hide_author,
+        hide_pr_numbers: args.hide_pr_numbers || config.hide_pr_numbers.unwrap_or(false),
+        hide_repo: args.hide_repo || config.hide_repo.unwrap_or(false),
+        hide_author: args.hide_author || config.hide_author.unwrap_or(false),
+    };
+
+    let refresh_intervals = RefreshIntervals {
+        list_secs: config.refresh_interval_list_secs.unwrap_or(180),
+        details_secs: config.refresh_interval_details_secs.unwrap_or(30),
     };
 
     if args.demo {
@@ -121,7 +162,7 @@ async fn main() {
                 refresh_demo(&c, days, &scope_for_refresh)
             });
 
-        if let Err(e) = run_tui(&conn, state, refresh_fn, false, args.bell, !args.no_notifications, true) {
+        if let Err(e) = run_tui(&conn, state, refresh_fn, false, bell_enabled, notify_enabled, true, refresh_intervals) {
             eprintln!("{e}");
             std::process::exit(1);
         }
@@ -172,7 +213,6 @@ async fn main() {
     let octo_for_refresh = octo.clone();
     let handle_for_refresh = handle.clone();
     let scope_for_refresh = scope.clone();
-    let include_team_requests = args.include_team_requests;
     let refresh_fn: Arc<dyn Fn() -> Result<Vec<crate::refresh::UiPr>, String> + Send + Sync> =
         Arc::new(move || {
             let c = open_db(&db_path_for_refresh)?;
@@ -198,7 +238,7 @@ async fn main() {
             }
         });
 
-    if let Err(e) = run_tui(&conn, state, refresh_fn, true, args.bell, !args.no_notifications, false) {
+    if let Err(e) = run_tui(&conn, state, refresh_fn, true, bell_enabled, notify_enabled, false, refresh_intervals) {
         eprintln!("{e}");
         std::process::exit(1);
     }
