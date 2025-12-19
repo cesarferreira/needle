@@ -53,6 +53,24 @@ impl Default for UiPrefs {
     }
 }
 
+/// Configurable refresh intervals.
+#[derive(Debug, Clone, Copy)]
+pub struct RefreshIntervals {
+    /// Auto-refresh interval in list view (seconds). Default: 180 (3 minutes).
+    pub list_secs: u64,
+    /// Auto-refresh interval in details view (seconds). Default: 30.
+    pub details_secs: u64,
+}
+
+impl Default for RefreshIntervals {
+    fn default() -> Self {
+        Self {
+            list_secs: 180,
+            details_secs: 30,
+        }
+    }
+}
+
 pub struct AppState {
     pub prs: Vec<UiPr>,
     pub selected_idx: usize, // index into visible_pr_indices
@@ -1234,6 +1252,7 @@ pub fn run_tui(
     bell_enabled: bool,
     notify_enabled: bool,
     demo_mode: bool,
+    refresh_intervals: RefreshIntervals,
 ) -> Result<(), String> {
     if !io::stdin().is_tty() || !io::stdout().is_tty() {
         return Err("Not a TTY: run `needle` in an interactive terminal.".to_string());
@@ -1300,11 +1319,11 @@ pub fn run_tui(
             }
         }
 
-        // Auto refresh in list view every 3 minutes (non-blocking).
+        // Auto refresh in list view (non-blocking).
         if state.mode == ViewMode::List && !state.refreshing {
             let should = state
                 .last_refresh_started
-                .map(|t| t.elapsed() >= Duration::from_secs(60 * 3))
+                .map(|t| t.elapsed() >= Duration::from_secs(refresh_intervals.list_secs))
                 .unwrap_or(true);
             if should {
                 state.last_refresh_started = Some(Instant::now());
@@ -1320,11 +1339,11 @@ pub fn run_tui(
             }
         }
 
-        // Auto refresh in details view every 30s (non-blocking).
+        // Auto refresh in details view (non-blocking).
         if state.mode == ViewMode::Details && !state.refreshing {
             let should = state
                 .details_last_auto_refresh
-                .map(|t| t.elapsed() >= Duration::from_secs(30))
+                .map(|t| t.elapsed() >= Duration::from_secs(refresh_intervals.details_secs))
                 .unwrap_or(true);
             if should {
                 state.details_last_auto_refresh = Some(Instant::now());

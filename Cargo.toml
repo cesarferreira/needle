@@ -33,3 +33,4 @@ unicode-width = "0.1"
 clap = { version = "4", features = ["derive"] }
 update-informer = "1"
 notify-rust = "4"
+toml = "0.8"
