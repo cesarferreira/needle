@@ -66,7 +66,7 @@ needle --days 7
 
 Needle shows desktop notifications for important events like CI failures, review requests, and PRs ready to merge.
 
-<img src="public/notifications.png" width="400" alt="needle notifications">
+<img src="public/notifications.png" width="100%" alt="needle notifications">
 
 On macOS, install [terminal-notifier](https://github.com/julienXX/terminal-notifier) for click-to-open support:
 
