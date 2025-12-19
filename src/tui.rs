@@ -702,7 +702,7 @@ fn build_footer(
     refreshing: bool,
     shimmer_phase: u8,
     filter_mode: bool,
-) -> Line<'static> {
+) -> (Line<'static>, usize) {
     #[derive(Clone)]
     struct Seg {
         text: String,
@@ -936,11 +936,16 @@ fn build_footer(
         segs = essential;
     }
 
+    let final_width: usize = segs
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.text.as_str()))
+        .sum();
+    
     let mut spans: Vec<Span<'static>> = Vec::new();
     for s in segs {
         spans.push(Span::styled(s.text, s.style));
     }
-    Line::from(spans)
+    (Line::from(spans), final_width)
 }
 
 fn build_details_lines(
@@ -1550,7 +1555,7 @@ pub fn run_tui(
                 (l, v)
             }
         };
-        let footer_line = build_footer(
+        let (footer_line, footer_line_width) = build_footer(
             inner_width,
             state.mode,
             state.refreshing,
@@ -1578,9 +1583,20 @@ pub fn run_tui(
                 f.render_widget(content, parts[0]);
 
                 // Footer (bottom): update notice on the left, controls on the right.
+                // Calculate the width needed for shortcuts to ensure they fit
+                let shortcuts_width = footer_line_width.min(parts[1].width as usize) as u16;
+                let footer_width = parts[1].width;
+                
+                // Allocate space: shortcuts get what they need (or available space), update notice gets the rest
+                let shortcuts_allocated = shortcuts_width.min(footer_width);
+                let update_notice_allocated = footer_width.saturating_sub(shortcuts_allocated);
+                
                 let footer_chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .constraints([
+                        Constraint::Length(update_notice_allocated.max(1)),
+                        Constraint::Length(shortcuts_allocated.max(1)),
+                    ])
                     .split(parts[1]);
 
                 let left_line = if let Some(msg) = state.update_notice.as_deref() {
