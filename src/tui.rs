@@ -1419,12 +1419,12 @@ pub fn run_tui(
                             // Notify for new CI failures (up to 3).
                             for pr in prs_new_ci_failure.iter().take(3) {
                                 let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
-                                crate::notify::notify_ci_failure(&pr.pr.title, &repo);
+                                crate::notify::notify_ci_failure(&pr.pr.title, &repo, &pr.pr.url);
                             }
                             // Notify for new review requests (up to 3).
                             for pr in prs_new_review_request.iter().take(3) {
                                 let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
-                                crate::notify::notify_review_requested(&pr.pr.title, &repo);
+                                crate::notify::notify_review_requested(&pr.pr.title, &repo, &pr.pr.url);
                             }
                             // Summary notification if PRs entered "Needs You".
                             if !prs_entered_needs_you.is_empty() {
@@ -1433,12 +1433,12 @@ pub fn run_tui(
                             // Notify for PRs that became ready to merge (up to 3).
                             for pr in prs_became_ready_to_merge.iter().take(3) {
                                 let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
-                                crate::notify::notify_ready_to_merge(&pr.pr.title, &repo);
+                                crate::notify::notify_ready_to_merge(&pr.pr.title, &repo, &pr.pr.url);
                             }
                             // Notify for new draft PRs (up to 3).
                             for pr in prs_new_draft.iter().take(3) {
                                 let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
-                                crate::notify::notify_new_draft(&pr.pr.title, &repo);
+                                crate::notify::notify_new_draft(&pr.pr.title, &repo, &pr.pr.url);
                             }
                         }
 
