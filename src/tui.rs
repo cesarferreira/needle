@@ -1,4 +1,4 @@
-use crate::db::now_unix;
+use crate::db::{now_unix, toggle_pin};
 use crate::refresh::{
     APPROVED_UNMERGED_OLD_SECS, CATEGORY_NEEDS_YOU_MIN, CATEGORY_NO_ACTION_MIN,
     CI_RUNNING_LONG_SECS, Category, SCORE_APPROVED_UNMERGED_OLD, SCORE_CI_FAILED_NEW,
@@ -456,7 +456,13 @@ fn build_list_lines(
         visible_pr_indices.push(idx);
 
         let is_selected = visible_idx == selected_visible_idx;
-        let prefix = if is_selected { "> " } else { "  " };
+        // Show pin indicator for pinned PRs
+        let prefix = match (is_selected, pr.is_pinned) {
+            (true, true) => ">📌",
+            (true, false) => "> ",
+            (false, true) => " 📌",
+            (false, false) => "  ",
+        };
 
         let repo = if ui.hide_repo {
             String::new()
@@ -526,6 +532,89 @@ fn build_list_lines(
         push_line(lines, inner_height, Line::from(spans));
     }
 
+    // PINNED section is rendered first.
+    let has_pinned = filtered
+        .iter()
+        .filter_map(|&i| prs.get(i))
+        .any(|p| p.is_pinned && !p.pr.is_draft);
+
+    if has_pinned && (lines.len() as u16) < inner_height {
+        let start_len = lines.len();
+
+        push_line(
+            &mut lines,
+            inner_height,
+            Line::from(Span::styled(
+                "📌 PINNED".to_string(),
+                Style::default()
+                    .fg(Color::LightBlue)
+                    .add_modifier(Modifier::BOLD),
+            )),
+        );
+        push_line(
+            &mut lines,
+            inner_height,
+            Line::from(Span::raw(
+                std::iter::repeat('─').take(iw).collect::<String>(),
+            )),
+        );
+        push_line(
+            &mut lines,
+            inner_height,
+            Line::from(Span::styled(
+                {
+                    let mut s = String::new();
+                    s.push_str("  ");
+                    if !ui.hide_repo {
+                        s.push_str(&pad_right("REPO", repo_w));
+                        s.push_str("  ");
+                    }
+                    if !ui.hide_author {
+                        s.push_str(&pad_right("AUTHOR", author_w));
+                        s.push_str("  ");
+                    }
+                    if !ui.hide_pr_numbers {
+                        s.push_str(&pad_right("PR", num_w));
+                        s.push_str("  ");
+                    }
+                    s.push_str(&pad_right("TITLE", title_w));
+                    s.push_str("  ");
+                    s.push_str(&pad_right("STATUS", status_w));
+                    s
+                },
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            )),
+        );
+
+        for &idx in filtered {
+            let Some(pr) = prs.get(idx) else { continue };
+            if !pr.is_pinned || pr.pr.is_draft {
+                continue;
+            }
+            render_row(
+                &mut lines,
+                &mut visible_pr_indices,
+                inner_height,
+                selected_visible_idx,
+                ui,
+                repo_w,
+                author_w,
+                num_w,
+                title_w,
+                status_w,
+                idx,
+                pr,
+            );
+            if (lines.len() as u16) >= inner_height {
+                break;
+            }
+        }
+
+        if lines.len() != start_len && (lines.len() as u16) < inner_height {
+            push_line(&mut lines, inner_height, Line::from(Span::raw("")));
+        }
+    }
+
     // DRAFT section is rendered at the bottom (but drafts are excluded from other sections).
     let has_drafts = filtered
         .iter()
@@ -539,11 +628,11 @@ fn build_list_lines(
         Category::Stale,
     ];
     for cat in cats {
-        // Skip empty sections entirely.
+        // Skip empty sections entirely. Exclude pinned PRs (shown in their own section).
         if !filtered
             .iter()
             .filter_map(|&i| prs.get(i))
-            .any(|p| !p.pr.is_draft && p.category == cat)
+            .any(|p| !p.pr.is_draft && !p.is_pinned && p.category == cat)
         {
             continue;
         }
@@ -594,10 +683,10 @@ fn build_list_lines(
             )),
         );
 
-        // Rows in this category
+        // Rows in this category (exclude pinned PRs, shown in their own section)
         for &idx in filtered {
             let Some(pr) = prs.get(idx) else { continue };
-            if pr.pr.is_draft {
+            if pr.pr.is_draft || pr.is_pinned {
                 continue;
             }
             if pr.category != cat {
@@ -804,6 +893,9 @@ fn build_footer(
                         label("refresh")
                     },
                     sep(),
+                    keycap("p"),
+                    label("pin"),
+                    sep(),
                     keycap("/"),
                     label("filter"),
                     sep(),
@@ -881,6 +973,9 @@ fn build_footer(
                 } else {
                     label("refresh")
                 },
+                sep(),
+                keycap("p"),
+                label("pin"),
                 sep(),
                 keycap("/"),
                 label("filter"),
@@ -1230,7 +1325,7 @@ fn help_lines() -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(
-            "  List    : ↑/↓ move  Enter open  Tab details  r refresh  / filter  ? help  q quit",
+            "  List    : ↑/↓ move  Enter open  Tab details  p pin  r refresh  / filter  ? help  q quit",
         ),
         Line::from("            Esc clears active filter (when not typing)"),
         Line::from("  Filter  : type to filter  ↑/↓ move  Enter open  Esc clear+exit"),
@@ -1245,7 +1340,7 @@ fn help_lines() -> Vec<Line<'static>> {
 }
 
 pub fn run_tui(
-    _conn: &Connection,
+    conn: &Connection,
     mut state: AppState,
     refresh_fn: Arc<dyn Fn() -> Result<Vec<UiPr>, String> + Send + Sync>,
     start_refresh_immediately: bool,
@@ -1842,6 +1937,29 @@ pub fn run_tui(
                         if state.mode == ViewMode::List && !state.filter_editing {
                             state.only_review_requested = !state.only_review_requested;
                             state.selected_idx = 0;
+                        }
+                    }
+                    KeyCode::Char('p') => {
+                        // Toggle pin on selected PR
+                        if state.mode == ViewMode::List && !state.filter_editing {
+                            if let Some(pr_idx) =
+                                visible_for_events.get(state.selected_idx).copied()
+                            {
+                                if let Some(pr) = state.prs.get_mut(pr_idx) {
+                                    if let Ok(new_state) = toggle_pin(conn, &pr.pr.pr_key) {
+                                        pr.is_pinned = new_state;
+                                        // Re-sort PRs to reflect new pin state
+                                        state.prs.sort_by(|a, b| {
+                                            b.is_pinned
+                                                .cmp(&a.is_pinned)
+                                                .then_with(|| b.score.cmp(&a.score))
+                                                .then_with(|| {
+                                                    b.pr.updated_at_unix.cmp(&a.pr.updated_at_unix)
+                                                })
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                     KeyCode::Tab => {

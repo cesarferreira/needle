@@ -28,6 +28,7 @@ pub struct DbPrRow {
 
     pub last_seen_at: Option<i64>,
     pub last_opened_at: Option<i64>,
+    pub pinned: Option<i64>,
 }
 
 pub fn now_unix() -> i64 {
@@ -118,6 +119,7 @@ fn migrate_schema(conn: &Connection) -> Result<(), String> {
     add_if_missing(conn, &existing, "mergeable", "TEXT")?;
     add_if_missing(conn, &existing, "merge_state_status", "TEXT")?;
     add_if_missing(conn, &existing, "author_is_viewer", "INTEGER")?;
+    add_if_missing(conn, &existing, "pinned", "INTEGER")?;
 
     Ok(())
 }
@@ -146,7 +148,7 @@ SELECT
   pr_key, owner, repo, number, title, url, author, updated_at_unix,
   last_commit_sha, last_ci_state, last_review_state,
   ci_checks_json, is_draft, mergeable, merge_state_status, author_is_viewer,
-  last_seen_at, last_opened_at
+  last_seen_at, last_opened_at, pinned
 FROM prs
 "#,
         )
@@ -180,6 +182,7 @@ FROM prs
             author_is_viewer: row.get(15).map_err(|e| format!("Row decode: {e}"))?,
             last_seen_at: row.get(16).map_err(|e| format!("Row decode: {e}"))?,
             last_opened_at: row.get(17).map_err(|e| format!("Row decode: {e}"))?,
+            pinned: row.get(18).map_err(|e| format!("Row decode: {e}"))?,
         };
         out.insert(pr.pr_key.clone(), pr);
     }
@@ -187,18 +190,20 @@ FROM prs
 }
 
 pub fn upsert_pr(conn: &Connection, pr: &DbPrRow, last_seen_at: i64) -> Result<(), String> {
+    // Note: pinned is intentionally NOT updated here to preserve user's pin state.
+    // Use toggle_pin() to change the pinned state.
     conn.execute(
         r#"
 INSERT INTO prs (
   pr_key, owner, repo, number, title, url, author, updated_at_unix,
   last_commit_sha, last_ci_state, last_review_state,
   ci_checks_json, is_draft, mergeable, merge_state_status,
-  author_is_viewer, last_seen_at, last_opened_at
+  author_is_viewer, last_seen_at, last_opened_at, pinned
 ) VALUES (
   ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
   ?9, ?10, ?11,
   ?12, ?13, ?14, ?15,
-  ?16, ?17, ?18
+  ?16, ?17, ?18, ?19
 )
 ON CONFLICT(pr_key) DO UPDATE SET
   owner = excluded.owner,
@@ -236,12 +241,36 @@ ON CONFLICT(pr_key) DO UPDATE SET
             pr.merge_state_status,
             pr.author_is_viewer,
             last_seen_at,
-            pr.last_opened_at
+            pr.last_opened_at,
+            pr.pinned
         ],
     )
     .map_err(|e| format!("Failed to upsert pr: {e}"))?;
     Ok(())
 }
+
+/// Toggle the pinned state of a PR. Returns the new pinned state.
+pub fn toggle_pin(conn: &Connection, pr_key: &str) -> Result<bool, String> {
+    // Get current state
+    let current: Option<i64> = conn
+        .query_row(
+            "SELECT pinned FROM prs WHERE pr_key = ?1",
+            params![pr_key],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to query pin state: {e}"))?;
+
+    let new_state = if current.unwrap_or(0) == 0 { 1 } else { 0 };
+
+    conn.execute(
+        "UPDATE prs SET pinned = ?1 WHERE pr_key = ?2",
+        params![new_state, pr_key],
+    )
+    .map_err(|e| format!("Failed to toggle pin: {e}"))?;
+
+    Ok(new_state == 1)
+}
+
 
 pub fn delete_prs_not_in(conn: &Connection, keep_pr_keys: &[String]) -> Result<(), String> {
     if keep_pr_keys.is_empty() {

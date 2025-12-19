@@ -59,6 +59,7 @@ pub struct UiPr {
     pub display_status: String,
     pub is_new_review_request: bool,
     pub is_new_ci_failure: bool,
+    pub is_pinned: bool,
 }
 
 fn parse_ci_state(s: Option<&str>) -> CiState {
@@ -125,6 +126,7 @@ pub fn load_cached(
 
         let is_new_review = false;
         let is_new_ci_failure = false;
+        let is_pinned = row.pinned.unwrap_or(0) != 0;
         let score = score_pr(&pr, None, now, is_new_ci_failure);
         let category = category_for(&pr, score);
         let display_status = status_text(&pr, now, is_new_ci_failure, is_new_review);
@@ -136,12 +138,15 @@ pub fn load_cached(
             display_status,
             is_new_review_request: is_new_review,
             is_new_ci_failure,
+            is_pinned,
         });
     }
 
+    // Sort: pinned first, then by score desc, then by updated_at desc
     out.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
+        b.is_pinned
+            .cmp(&a.is_pinned)
+            .then_with(|| b.score.cmp(&a.score))
             .then_with(|| b.pr.updated_at_unix.cmp(&a.pr.updated_at_unix))
     });
     Ok(out)
@@ -357,6 +362,7 @@ pub async fn refresh(
         let old = existing.get(&pr.pr_key);
         let new_review = is_new_review_request(&pr, old);
         let new_ci_failure = is_new_ci_failure(&pr, old);
+        let is_pinned = old.and_then(|r| r.pinned).unwrap_or(0) != 0;
 
         let db_row = DbPrRow {
             pr_key: pr.pr_key.clone(),
@@ -377,6 +383,7 @@ pub async fn refresh(
             author_is_viewer: Some(viewer_author_to_db(pr.is_viewer_author)),
             last_seen_at: Some(now),
             last_opened_at: old.and_then(|r| r.last_opened_at),
+            pinned: old.and_then(|r| r.pinned),
         };
         upsert_pr(conn, &db_row, now)?;
 
@@ -391,15 +398,18 @@ pub async fn refresh(
             display_status,
             is_new_review_request: new_review,
             is_new_ci_failure: new_ci_failure,
+            is_pinned,
         });
     }
 
     // Keep cache consistent with the current attention set so cached startup doesn't show stale/irrelevant PRs.
     delete_prs_not_in(conn, &keep_keys)?;
 
+    // Sort: pinned first, then by score desc, then by updated_at desc
     out.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
+        b.is_pinned
+            .cmp(&a.is_pinned)
+            .then_with(|| b.score.cmp(&a.score))
             .then_with(|| b.pr.updated_at_unix.cmp(&a.pr.updated_at_unix))
     });
 
@@ -430,6 +440,7 @@ pub fn refresh_demo(
         let old = existing.get(&pr.pr_key);
         let new_review = is_new_review_request(&pr, old);
         let new_ci_failure = is_new_ci_failure(&pr, old);
+        let is_pinned = old.and_then(|r| r.pinned).unwrap_or(0) != 0;
 
         let db_row = DbPrRow {
             pr_key: pr.pr_key.clone(),
@@ -450,6 +461,7 @@ pub fn refresh_demo(
             author_is_viewer: Some(viewer_author_to_db(pr.is_viewer_author)),
             last_seen_at: Some(now),
             last_opened_at: old.and_then(|r| r.last_opened_at),
+            pinned: old.and_then(|r| r.pinned),
         };
         upsert_pr(conn, &db_row, now)?;
 
@@ -464,14 +476,17 @@ pub fn refresh_demo(
             display_status,
             is_new_review_request: new_review,
             is_new_ci_failure: new_ci_failure,
+            is_pinned,
         });
     }
 
     delete_prs_not_in(conn, &keep_keys)?;
 
+    // Sort: pinned first, then by score desc, then by updated_at desc
     out.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
+        b.is_pinned
+            .cmp(&a.is_pinned)
+            .then_with(|| b.score.cmp(&a.score))
             .then_with(|| b.pr.updated_at_unix.cmp(&a.pr.updated_at_unix))
     });
     Ok(out)
@@ -588,6 +603,7 @@ mod tests {
             author_is_viewer: None,
             last_seen_at: Some(now - 10),
             last_opened_at: None,
+            pinned: None,
         };
 
         assert!(is_new_ci_failure(&pr, Some(&old)));
