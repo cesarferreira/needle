@@ -2,6 +2,7 @@ mod db;
 mod demo;
 mod github;
 mod model;
+mod notify;
 mod refresh;
 mod timeutil;
 mod tui;
@@ -61,6 +62,10 @@ struct CliArgs {
     #[arg(long)]
     bell: bool,
 
+    /// Disable OS desktop notifications on important new events.
+    #[arg(long)]
+    no_notifications: bool,
+
     /// Hide PR numbers column in list view.
     #[arg(long)]
     hide_pr_numbers: bool,
@@ -116,7 +121,7 @@ async fn main() {
                 refresh_demo(&c, days, &scope_for_refresh)
             });
 
-        if let Err(e) = run_tui(&conn, state, refresh_fn, false, args.bell) {
+        if let Err(e) = run_tui(&conn, state, refresh_fn, false, args.bell, !args.no_notifications, true) {
             eprintln!("{e}");
             std::process::exit(1);
         }
@@ -193,7 +198,7 @@ async fn main() {
             }
         });
 
-    if let Err(e) = run_tui(&conn, state, refresh_fn, true, args.bell) {
+    if let Err(e) = run_tui(&conn, state, refresh_fn, true, args.bell, !args.no_notifications, false) {
         eprintln!("{e}");
         std::process::exit(1);
     }
