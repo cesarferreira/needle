@@ -1287,9 +1287,9 @@ pub fn run_tui(
             }
         }
 
-        // Demo mode: send random notifications every 3 seconds.
+        // Demo mode: send random notifications every 5 seconds.
         if let Some(last) = last_demo_notification {
-            if last.elapsed() >= Duration::from_secs(3) {
+            if last.elapsed() >= Duration::from_secs(5) {
                 crate::notify::notify_random_demo();
                 last_demo_notification = Some(Instant::now());
             }
