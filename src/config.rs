@@ -48,10 +48,18 @@ pub struct Config {
 }
 
 /// Returns the path to the config file.
-/// Platform-specific: `~/.config/needle/config.toml` on Linux/macOS,
+/// Uses `~/.config/needle/config.toml` on Unix (Linux/macOS),
 /// `%APPDATA%\needle\config.toml` on Windows.
 pub fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("needle").join("config.toml"))
+    #[cfg(windows)]
+    {
+        dirs::config_dir().map(|p| p.join("needle").join("config.toml"))
+    }
+    #[cfg(not(windows))]
+    {
+        // Use ~/.config/needle/ on Unix systems (more intuitive for CLI tools)
+        dirs::home_dir().map(|p| p.join(".config").join("needle").join("config.toml"))
+    }
 }
 
 /// Default config file content with all options documented.
