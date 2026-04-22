@@ -99,7 +99,7 @@ struct CommitNode {
 
 #[derive(Debug, serde::Deserialize)]
 struct Commits {
-    nodes: Option<Vec<CommitNode>>,
+    nodes: Option<Vec<Option<CommitNode>>>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -378,7 +378,7 @@ fn map_ci_checks(node: &PullRequestNode) -> Vec<CiCheck> {
     let Some(nodes) = &commits.nodes else {
         return Vec::new();
     };
-    let Some(first) = nodes.first() else {
+    let Some(first) = nodes.first().and_then(|n| n.as_ref()) else {
         return Vec::new();
     };
     let Some(commit) = &first.commit else {
@@ -493,7 +493,7 @@ fn derive_ci_state(rollup_state: Option<&str>, checks: &[CiCheck]) -> CiState {
 fn rollup_state(node: &PullRequestNode) -> Option<&str> {
     let commits = node.commits.as_ref()?;
     let nodes = commits.nodes.as_ref()?;
-    let first = nodes.first()?;
+    let first = nodes.first()?.as_ref()?;
     let commit = first.commit.as_ref()?;
     let rollup = commit.status_check_rollup.as_ref()?;
     rollup.state.as_deref()
