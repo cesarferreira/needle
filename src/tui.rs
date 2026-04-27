@@ -1053,7 +1053,7 @@ fn build_footer(
         .iter()
         .map(|s| UnicodeWidthStr::width(s.text.as_str()))
         .sum();
-    
+
     let mut spans: Vec<Span<'static>> = Vec::new();
     for s in segs {
         spans.push(Span::styled(s.text, s.style));
@@ -1152,9 +1152,7 @@ fn build_details_lines(
         if (out.len() as u16) < inner_height {
             out.push(Line::from(Span::styled(
                 "MERGE BLOCKERS".to_string(),
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             )));
         }
         if (out.len() as u16) < inner_height {
@@ -1383,8 +1381,6 @@ pub fn run_tui(
     refresh_fn: Arc<dyn Fn() -> Result<Vec<UiPr>, String> + Send + Sync>,
     start_refresh_immediately: bool,
     bell_enabled: bool,
-    notify_enabled: bool,
-    demo_mode: bool,
     refresh_intervals: RefreshIntervals,
 ) -> Result<(), String> {
     if !io::stdin().is_tty() || !io::stdout().is_tty() {
@@ -1401,20 +1397,6 @@ pub fn run_tui(
 
     let mut refresh_rx: Option<mpsc::Receiver<Result<Vec<UiPr>, String>>> = None;
     let mut update_rx = spawn_update_check();
-
-    // Track seen repos for new-repo notifications.
-    let mut seen_repos: HashSet<String> = state
-        .prs
-        .iter()
-        .map(|p| format!("{}/{}", p.pr.owner, p.pr.repo))
-        .collect();
-
-    // Timer for demo mode random notifications (every 3 seconds).
-    let mut last_demo_notification: Option<Instant> = if demo_mode && notify_enabled {
-        Some(Instant::now())
-    } else {
-        None
-    };
 
     if start_refresh_immediately && !state.refreshing {
         state.refreshing = true;
@@ -1441,14 +1423,6 @@ pub fn run_tui(
                     update_rx = None;
                 }
                 Err(TryRecvError::Empty) => {}
-            }
-        }
-
-        // Demo mode: send random notifications every 5 seconds.
-        if let Some(last) = last_demo_notification {
-            if last.elapsed() >= Duration::from_secs(5) {
-                crate::notify::notify_random_demo();
-                last_demo_notification = Some(Instant::now());
             }
         }
 
@@ -1499,17 +1473,11 @@ pub fn run_tui(
             if let Some(rx) = &refresh_rx {
                 match rx.try_recv() {
                     Ok(Ok(new_prs)) => {
-                        // Compute changes for bell/notification alerts.
+                        // Compute changes for bell alerts.
                         let old_needs: HashSet<String> = state
                             .prs
                             .iter()
                             .filter(|p| p.category == Category::NeedsYou)
-                            .map(|p| p.pr.pr_key.clone())
-                            .collect();
-                        let old_ready_to_merge: HashSet<String> = state
-                            .prs
-                            .iter()
-                            .filter(|p| p.category == Category::ReadyToMerge)
                             .map(|p| p.pr.pr_key.clone())
                             .collect();
                         let prs_entered_needs_you: Vec<&UiPr> = new_prs
@@ -1519,88 +1487,15 @@ pub fn run_tui(
                                     && !old_needs.contains(&p.pr.pr_key)
                             })
                             .collect();
-                        let prs_became_ready_to_merge: Vec<&UiPr> = new_prs
-                            .iter()
-                            .filter(|p| {
-                                p.category == Category::ReadyToMerge
-                                    && !old_ready_to_merge.contains(&p.pr.pr_key)
-                            })
-                            .collect();
-                        let prs_new_ci_failure: Vec<&UiPr> = new_prs
-                            .iter()
-                            .filter(|p| p.is_new_ci_failure)
-                            .collect();
-                        let prs_new_review_request: Vec<&UiPr> = new_prs
-                            .iter()
-                            .filter(|p| p.is_new_review_request)
-                            .collect();
-
-                        // Detect new repos.
-                        let current_repos: HashSet<String> = new_prs
-                            .iter()
-                            .map(|p| format!("{}/{}", p.pr.owner, p.pr.repo))
-                            .collect();
-                        let new_repos: Vec<String> = current_repos
-                            .iter()
-                            .filter(|r| !seen_repos.contains(*r))
-                            .cloned()
-                            .collect();
-
-                        // Detect new draft PRs.
-                        let old_pr_keys: HashSet<String> = state
-                            .prs
-                            .iter()
-                            .map(|p| p.pr.pr_key.clone())
-                            .collect();
-                        let prs_new_draft: Vec<&UiPr> = new_prs
-                            .iter()
-                            .filter(|p| {
-                                p.pr.is_draft && !old_pr_keys.contains(&p.pr.pr_key)
-                            })
-                            .collect();
+                        let prs_new_ci_failure: Vec<&UiPr> =
+                            new_prs.iter().filter(|p| p.is_new_ci_failure).collect();
 
                         // Bell alert (terminal bell).
                         if bell_enabled
-                            && (!prs_entered_needs_you.is_empty()
-                                || !prs_new_ci_failure.is_empty())
+                            && (!prs_entered_needs_you.is_empty() || !prs_new_ci_failure.is_empty())
                         {
                             let _ = execute!(terminal.backend_mut(), Print("\x07"));
                         }
-
-                        // OS notifications.
-                        if notify_enabled {
-                            // Notify for new repos.
-                            for repo in &new_repos {
-                                crate::notify::notify_new_repo(repo);
-                            }
-                            // Notify for new CI failures (up to 3).
-                            for pr in prs_new_ci_failure.iter().take(3) {
-                                let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
-                                crate::notify::notify_ci_failure(&pr.pr.title, &repo, &pr.pr.url);
-                            }
-                            // Notify for new review requests (up to 3).
-                            for pr in prs_new_review_request.iter().take(3) {
-                                let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
-                                crate::notify::notify_review_requested(&pr.pr.title, &repo, &pr.pr.url);
-                            }
-                            // Summary notification if PRs entered "Needs You".
-                            if !prs_entered_needs_you.is_empty() {
-                                crate::notify::notify_needs_you(prs_entered_needs_you.len());
-                            }
-                            // Notify for PRs that became ready to merge (up to 3).
-                            for pr in prs_became_ready_to_merge.iter().take(3) {
-                                let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
-                                crate::notify::notify_ready_to_merge(&pr.pr.title, &repo, &pr.pr.url);
-                            }
-                            // Notify for new draft PRs (up to 3).
-                            for pr in prs_new_draft.iter().take(3) {
-                                let repo = format!("{}/{}", pr.pr.owner, pr.pr.repo);
-                                crate::notify::notify_new_draft(&pr.pr.title, &repo, &pr.pr.url);
-                            }
-                        }
-
-                        // Update seen repos set.
-                        seen_repos = current_repos;
 
                         state.prs = new_prs;
                         state.refreshing = false;
@@ -1738,11 +1633,11 @@ pub fn run_tui(
                 // Calculate the width needed for shortcuts to ensure they fit
                 let shortcuts_width = footer_line_width.min(parts[1].width as usize) as u16;
                 let footer_width = parts[1].width;
-                
+
                 // Allocate space: shortcuts get what they need (or available space), update notice gets the rest
                 let shortcuts_allocated = shortcuts_width.min(footer_width);
                 let update_notice_allocated = footer_width.saturating_sub(shortcuts_allocated);
-                
+
                 let footer_chunks = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([

@@ -51,7 +51,6 @@ needle
 - `--exclude <owner/repo>`: hide these repos (repeatable or comma-delimited)
 - `--include-team-requests`: include PRs requested to teams you are in (default: user-only)
 - `--bell`: ring terminal bell when a PR enters **NEEDS YOU** or when CI fails
-- `--no-notifications`: disable desktop notifications (enabled by default)
 - `--hide-pr-numbers`: hide PR numbers column
 - `--hide-repo`: hide repository column
 - `--hide-author`: hide author column
@@ -89,20 +88,6 @@ CLI arguments always override config file values.
 ## Pinned PRs
 
 Press `p` in list view to pin/unpin a PR. Pinned PRs appear in a dedicated **📌 PINNED** section at the top of the list, regardless of their score. Pin state persists across sessions.
-
-## Desktop Notifications
-
-Needle shows desktop notifications for important events like CI failures, review requests, and PRs ready to merge.
-
-<img src="public/notifications.png" width="100%" alt="needle notifications">
-
-On macOS, install [terminal-notifier](https://github.com/julienXX/terminal-notifier) for click-to-open support:
-
-```bash
-brew install terminal-notifier
-```
-
-With `terminal-notifier` installed, clicking a notification opens the PR in your browser. Without it, notifications still work but won't be clickable.
 
 ## Requirements
 

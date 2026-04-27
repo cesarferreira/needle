@@ -57,7 +57,6 @@ pub struct UiPr {
     pub score: i32,
     pub category: Category,
     pub display_status: String,
-    pub is_new_review_request: bool,
     pub is_new_ci_failure: bool,
     pub is_pinned: bool,
 }
@@ -138,7 +137,6 @@ pub fn load_cached(
             score,
             category,
             display_status,
-            is_new_review_request: is_new_review,
             is_new_ci_failure,
             is_pinned,
         });
@@ -398,7 +396,6 @@ pub async fn refresh(
             score,
             category,
             display_status,
-            is_new_review_request: new_review,
             is_new_ci_failure: new_ci_failure,
             is_pinned,
         });
@@ -476,7 +473,6 @@ pub fn refresh_demo(
             score,
             category,
             display_status,
-            is_new_review_request: new_review,
             is_new_ci_failure: new_ci_failure,
             is_pinned,
         });

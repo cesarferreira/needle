@@ -28,9 +28,6 @@ pub struct Config {
     /// Emit a terminal bell on important new events.
     pub bell: Option<bool>,
 
-    /// Disable OS desktop notifications.
-    pub no_notifications: Option<bool>,
-
     /// Hide PR numbers column in list view.
     pub hide_pr_numbers: Option<bool>,
 
@@ -84,9 +81,6 @@ const DEFAULT_CONFIG: &str = r#"# Needle configuration file
 
 # Ring terminal bell on important events (default: false)
 # bell = false
-
-# Disable desktop notifications (default: false, i.e. notifications enabled)
-# no_notifications = false
 
 # Hide columns in list view
 # hide_pr_numbers = false
@@ -170,7 +164,6 @@ include = ["my-company/important-repo"]
 exclude = ["my-company/legacy-repo"]
 include_team_requests = true
 bell = true
-no_notifications = false
 hide_pr_numbers = false
 hide_repo = false
 hide_author = true
@@ -193,7 +186,6 @@ refresh_interval_details_secs = 15
         );
         assert_eq!(config.include_team_requests, Some(true));
         assert_eq!(config.bell, Some(true));
-        assert_eq!(config.no_notifications, Some(false));
         assert_eq!(config.hide_author, Some(true));
         assert_eq!(config.refresh_interval_list_secs, Some(120));
         assert_eq!(config.refresh_interval_details_secs, Some(15));
@@ -230,7 +222,6 @@ bell = true
         assert!(config.exclude.is_none());
         assert!(config.include_team_requests.is_none());
         assert!(config.bell.is_none());
-        assert!(config.no_notifications.is_none());
         assert!(config.hide_pr_numbers.is_none());
         assert!(config.hide_repo.is_none());
         assert!(config.hide_author.is_none());
@@ -266,10 +257,6 @@ bell = true
             "DEFAULT_CONFIG should document 'bell' option"
         );
         assert!(
-            DEFAULT_CONFIG.contains("no_notifications"),
-            "DEFAULT_CONFIG should document 'no_notifications' option"
-        );
-        assert!(
             DEFAULT_CONFIG.contains("hide_pr_numbers"),
             "DEFAULT_CONFIG should document 'hide_pr_numbers' option"
         );
@@ -292,12 +279,22 @@ bell = true
     }
 
     #[test]
+    fn test_default_config_does_not_document_notifications() {
+        assert!(
+            !DEFAULT_CONFIG.to_lowercase().contains("notification"),
+            "DEFAULT_CONFIG should not document notification options"
+        );
+        assert!(
+            !DEFAULT_CONFIG.contains("no_notifications"),
+            "DEFAULT_CONFIG should not document 'no_notifications' option"
+        );
+    }
+
+    #[test]
     fn test_create_default_config_creates_file() {
         // Create a temporary directory for the test
-        let temp_dir = std::env::temp_dir().join(format!(
-            "needle-test-create-config-{}",
-            std::process::id()
-        ));
+        let temp_dir =
+            std::env::temp_dir().join(format!("needle-test-create-config-{}", std::process::id()));
         let config_path = temp_dir.join("config.toml");
 
         // Clean up any previous test run
@@ -328,7 +325,8 @@ bell = true
         let config_path = temp_dir.join("config.toml");
 
         // Clean up any previous test run
-        let base_dir = std::env::temp_dir().join(format!("needle-test-nested-{}", std::process::id()));
+        let base_dir =
+            std::env::temp_dir().join(format!("needle-test-nested-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base_dir);
 
         // Create the config file (should create all parent directories)
@@ -348,10 +346,8 @@ bell = true
     #[test]
     fn test_load_config_from_existing_file() {
         // Create a temporary config file with custom values
-        let temp_dir = std::env::temp_dir().join(format!(
-            "needle-test-load-existing-{}",
-            std::process::id()
-        ));
+        let temp_dir =
+            std::env::temp_dir().join(format!("needle-test-load-existing-{}", std::process::id()));
         let config_path = temp_dir.join("config.toml");
 
         // Clean up any previous test run
@@ -422,4 +418,3 @@ another_unknown = ["value"]
         assert_eq!(config.days, Some(7));
     }
 }
-

@@ -3,7 +3,6 @@ mod db;
 mod demo;
 mod github;
 mod model;
-mod notify;
 mod refresh;
 mod timeutil;
 mod tui;
@@ -64,10 +63,6 @@ struct CliArgs {
     #[arg(long)]
     bell: bool,
 
-    /// Disable OS desktop notifications on important new events.
-    #[arg(long)]
-    no_notifications: bool,
-
     /// Hide PR numbers column in list view.
     #[arg(long)]
     hide_pr_numbers: bool,
@@ -121,8 +116,6 @@ async fn main() {
     let include_team_requests =
         args.include_team_requests || config.include_team_requests.unwrap_or(false);
     let bell_enabled = args.bell || config.bell.unwrap_or(false);
-    let notify_enabled =
-        !(args.no_notifications || config.no_notifications.unwrap_or(false));
 
     let ui = UiPrefs {
         hide_pr_numbers: args.hide_pr_numbers || config.hide_pr_numbers.unwrap_or(false),
@@ -162,7 +155,14 @@ async fn main() {
                 refresh_demo(&c, days, &scope_for_refresh)
             });
 
-        if let Err(e) = run_tui(&conn, state, refresh_fn, false, bell_enabled, notify_enabled, true, refresh_intervals) {
+        if let Err(e) = run_tui(
+            &conn,
+            state,
+            refresh_fn,
+            false,
+            bell_enabled,
+            refresh_intervals,
+        ) {
             eprintln!("{e}");
             std::process::exit(1);
         }
@@ -238,8 +238,31 @@ async fn main() {
             }
         });
 
-    if let Err(e) = run_tui(&conn, state, refresh_fn, true, bell_enabled, notify_enabled, false, refresh_intervals) {
+    if let Err(e) = run_tui(
+        &conn,
+        state,
+        refresh_fn,
+        true,
+        bell_enabled,
+        refresh_intervals,
+    ) {
         eprintln!("{e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn help_does_not_advertise_notification_options() {
+        let mut help = Vec::new();
+        CliArgs::command().write_long_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+
+        assert!(!help.contains("--no-notifications"));
+        assert!(!help.to_lowercase().contains("notification"));
     }
 }
